@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "python-3.12", "postgresql-16"]
 
 [deployment]
 router = "application"
@@ -18,3 +18,11 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[nix]
+channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+AM_FORECAST_DSN = "postgresql://postgres:password@helium/heliumdb?sslmode=disable"
