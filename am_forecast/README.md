@@ -72,6 +72,9 @@ python scripts/import_cli.py "$DSN" accept 2 --user=sam
 python scripts/import_cli.py "$DSN" prepare legacy_forecast.csv --user=sam
 python scripts/import_cli.py "$DSN" accept 3 --user=sam
 
+# After all three imports are accepted, run the matcher before the test suite.
+python scripts/match_report.py "$DSN" --run --user=sam
+
 pytest tests/ --dsn "$DSN"
 ```
 
