@@ -141,10 +141,31 @@ export interface Session {
   can: Record<string, boolean>;
 }
 
-let session: { user: string; role: string } = { user: "sam", role: "viewer" };
+const IDENTITY_KEY = "am-forecast-identity";
+
+function loadIdentity(): { user: string; role: string } {
+  try {
+    const raw = localStorage.getItem(IDENTITY_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // storage unavailable; fall through to the default
+  }
+  return { user: "sam", role: "viewer" };
+}
+
+let session = loadIdentity();
+
+export function currentIdentity() {
+  return session;
+}
 
 export function setIdentity(user: string, role: string) {
   session = { user, role };
+  try {
+    localStorage.setItem(IDENTITY_KEY, JSON.stringify(session));
+  } catch {
+    // non-fatal: the role simply will not survive a reload
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

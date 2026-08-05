@@ -71,9 +71,30 @@ export function monthAU(value) {
         timeZone: "Australia/Melbourne",
     });
 }
-let session = { user: "sam", role: "viewer" };
+const IDENTITY_KEY = "am-forecast-identity";
+function loadIdentity() {
+    try {
+        const raw = localStorage.getItem(IDENTITY_KEY);
+        if (raw)
+            return JSON.parse(raw);
+    }
+    catch {
+        // storage unavailable; fall through to the default
+    }
+    return { user: "sam", role: "viewer" };
+}
+let session = loadIdentity();
+export function currentIdentity() {
+    return session;
+}
 export function setIdentity(user, role) {
     session = { user, role };
+    try {
+        localStorage.setItem(IDENTITY_KEY, JSON.stringify(session));
+    }
+    catch {
+        // non-fatal: the role simply will not survive a reload
+    }
 }
 async function request(path, init) {
     const res = await fetch(path, {

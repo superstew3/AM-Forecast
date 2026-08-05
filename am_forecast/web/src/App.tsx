@@ -1,6 +1,6 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { api, setIdentity } from "./lib/api";
+import { api, setIdentity, currentIdentity } from "./lib/api";
 import Business from "./pages/Business";
 import Managers from "./pages/Managers";
 import Movement from "./pages/Movement";
@@ -50,7 +50,7 @@ export default function App() {
         <div className="identity">
           <label>
             Role
-            <select defaultValue="viewer"
+            <select defaultValue={currentIdentity().role}
                     onChange={(e) => { setIdentity("sam", e.target.value);
                                        window.location.reload(); }}>
               <option value="viewer">Viewer</option>
