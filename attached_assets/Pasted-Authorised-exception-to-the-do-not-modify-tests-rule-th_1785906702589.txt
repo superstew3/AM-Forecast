@@ -1,0 +1,57 @@
+Authorised exception to the "do not modify tests" rule — this is a
+defect in code I wrote. Make exactly these changes.
+
+1. Add to the top of tests/conftest.py, after the existing imports:
+
+    import os
+    from pathlib import Path
+
+    # Source fixtures live outside the repo. Override with
+    # AM_FORECAST_FIXTURES; tests needing them skip when absent.
+    FIXTURE_DIR = Path(os.environ.get("AM_FORECAST_FIXTURES",
+                                      "/mnt/user-data/uploads"))
+    SALES_FILE = str(FIXTURE_DIR / "Sales_Transaction_List_25-26.csv")
+    RENEWALS_FILE = str(FIXTURE_DIR / "Renewals_Pending_Summary_-_now-june2027.csv")
+
+    def pytest_collection_modifyitems(config, items):
+        """Skip fixture-dependent tests when the source files are absent.
+
+        These tests re-import the raw CSVs to exercise the import and
+        matching paths. Without the files they cannot run, and skipping
+        is more honest than erroring.
+        """
+        if FIXTURE_DIR.is_dir():
+            return
+        skip = pytest.mark.skip(
+            reason=f"source fixtures not found at {FIXTURE_DIR}; "
+                   "set AM_FORECAST_FIXTURES")
+        for item in items:
+            if item.module.__name__.split(".")[-1] in (
+                    "test_stage2_import", "test_stage3_forecast",
+                    "test_stage4_matching"):
+                item.add_marker(skip)
+
+2. In tests/test_stage2_import.py, test_stage3_forecast.py and
+   test_stage4_matching.py, delete the local SALES_FILE / RENEWALS_FILE
+   constants and import them from conftest instead:
+
+    from conftest import RENEWALS_FILE, SALES_FILE
+
+   (test_stage2 has both; stage3 and stage4 have RENEWALS_FILE only —
+   import only what each file already used.)
+
+3. In tests/test_stage5_dashboard.py, inside
+   test_19_accept_uses_the_exact_previewed_figures, replace the
+   hardcoded src string with the imported SALES_FILE constant, and add
+   at the top of that test:
+
+    if not Path(SALES_FILE).exists():
+        pytest.skip("source fixture not available")
+
+4. In README.md, add to the test instructions:
+
+    Tests in stages 2 to 4 re-import the raw source CSVs. Point
+    AM_FORECAST_FIXTURES at the directory holding them, or those tests
+    skip.
+
+Change nothing else. Do not alter any assertion or expected value.

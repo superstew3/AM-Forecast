@@ -12,8 +12,9 @@ import pytest
 
 from app.importers import accept, prepare, rollback
 
+from conftest import RENEWALS_FILE
+
 CENT = Decimal("0.01")
-RENEWALS_FILE = "/mnt/user-data/uploads/Renewals_Pending_Summary_-_now-june2027.csv"
 
 
 def future_months(conn) -> list:

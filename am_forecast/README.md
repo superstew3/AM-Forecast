@@ -678,6 +678,10 @@ cd web && npm test                          # 11 frontend formatting tests
 npm run typecheck
 ```
 
+Tests in stages 2 to 4 re-import the raw source CSVs. Point
+AM_FORECAST_FIXTURES at the directory holding them, or those tests
+skip.
+
 A static preview rendered from live API responses, for review without Node:
 
 ```bash
