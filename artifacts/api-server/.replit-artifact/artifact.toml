@@ -15,7 +15,7 @@ run = "sh -c 'cd /home/runner/workspace/am_forecast && exec python -m uvicorn ap
 [services.production]
 
 [services.production.run]
-args = ["sh", "-c", "cd /home/runner/workspace/am_forecast && exec python -m uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+args = ["sh", "-c", "cd /home/runner/workspace/am_forecast && export AM_FORECAST_DSN=\"$DATABASE_URL\" && exec python -m uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
 
 [services.production.health.startup]
 path = "/api/health"
