@@ -370,13 +370,15 @@ def budget(financial_year: int = Query(2026), user=Depends(current_user)):
     quarters = fetch_all("""
         SELECT canonical_manager, financial_quarter, original_renewal_forecast,
                growth_basis, growth_pct, dollar_override, new_business_growth_target,
-               total_budget
+               total_budget, has_locked_months, locked_months
         FROM v_budget_quarter WHERE financial_year=%(fy)s
         ORDER BY canonical_manager, financial_quarter""", {"fy": financial_year})
     monthly = fetch_all("""
         SELECT canonical_manager, forecast_month, financial_quarter, original_forecast,
-               allocation_method, calculated_growth_target, override_amount,
-               new_business_growth_target, is_overridden, override_reason, total_budget
+               growth_basis, growth_pct, allocation_method, calculated_growth_target,
+               override_amount, new_business_growth_target, is_overridden,
+               override_reason, total_budget, is_locked, locked_at, locked_by,
+               lock_reason
         FROM v_monthly_budget WHERE financial_year=%(fy)s
         ORDER BY canonical_manager, forecast_month""", {"fy": financial_year})
     rates = fetch_all("""
@@ -394,10 +396,11 @@ def budget(financial_year: int = Query(2026), user=Depends(current_user)):
 
 
 class GrowthBody(BaseModel):
-    scope: str = Field(pattern="^(global|manager|manager_quarter)$")
+    scope: str = Field(pattern="^(global|manager|manager_quarter|manager_month)$")
     canonical_manager: str | None = None
     financial_year: int | None = None
     financial_quarter: int | None = None
+    target_month: dt.date | None = None
     growth_pct: Decimal | None = None
     dollar_override: Decimal | None = None
     reason: str = Field(min_length=3)
@@ -413,21 +416,22 @@ def set_growth_rate(body: GrowthBody, user=Depends(require_admin)):
                            WHERE active AND scope=%s
                              AND canonical_manager IS NOT DISTINCT FROM %s
                              AND financial_year IS NOT DISTINCT FROM %s
-                             AND financial_quarter IS NOT DISTINCT FROM %s""",
+                             AND financial_quarter IS NOT DISTINCT FROM %s
+                             AND target_month IS NOT DISTINCT FROM %s""",
                         (body.scope, body.canonical_manager, body.financial_year,
-                         body.financial_quarter))
+                         body.financial_quarter, body.target_month))
             previous = cur.fetchone()
             if previous:
                 cur.execute("""UPDATE growth_rate SET active=false, superseded_at=now()
                                WHERE id=%s""", (previous[0],))
             cur.execute("""
                 INSERT INTO growth_rate (scope, canonical_manager, financial_year,
-                    financial_quarter, growth_pct, dollar_override, note, active,
-                    created_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,true,%s) RETURNING id""",
+                    financial_quarter, target_month, growth_pct, dollar_override,
+                    note, active, created_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,true,%s) RETURNING id""",
                         (body.scope, body.canonical_manager, body.financial_year,
-                         body.financial_quarter, body.growth_pct, body.dollar_override,
-                         body.reason, user.username))
+                         body.financial_quarter, body.target_month, body.growth_pct,
+                         body.dollar_override, body.reason, user.username))
             new_id = cur.fetchone()[0]
             cur.execute("""
                 INSERT INTO budget_audit (action, scope_description, canonical_manager,
@@ -484,6 +488,102 @@ def set_monthly_override(body: MonthlyOverrideBody, user=Depends(require_admin))
     return {"id": new_id}
 
 
+class LockBody(BaseModel):
+    canonical_manager: str
+    target_month: dt.date
+    reason: str = Field(min_length=3)
+
+
+@router.post("/budget/lock", tags=["budget"])
+def lock_budget_month(body: LockBody, user=Depends(require_admin)):
+    """Freeze a month's budget at the figure it currently holds.
+
+    Once a target has been agreed with a manager it should not drift because a
+    later Renewals Pending upload moved the forecast underneath it. Locking
+    stores the whole budget and its components as at this moment; unlocking is a
+    separate, audited act.
+    """
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT original_forecast, new_business_growth_target, total_budget,
+                       growth_pct, is_locked
+                FROM v_monthly_budget
+                WHERE canonical_manager = %s AND forecast_month = %s""",
+                        (body.canonical_manager, body.target_month))
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(
+                    404, f"no budget for {body.canonical_manager} in "
+                         f"{body.target_month:%B %Y}")
+            forecast, target, budget, growth_pct, already = row
+            if already:
+                raise HTTPException(409, "that month is already locked")
+
+            cur.execute("""
+                INSERT INTO budget_lock
+                    (canonical_manager, target_month, locked_budget,
+                     locked_renewal_forecast, locked_growth_target, locked_growth_pct,
+                     reason, locked_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                        (body.canonical_manager, body.target_month, budget, forecast,
+                         target, growth_pct, body.reason, user.username))
+            lock_id = cur.fetchone()[0]
+            cur.execute("""
+                INSERT INTO budget_audit (action, scope_description, canonical_manager,
+                    before_value, after_value, reason, performed_by)
+                VALUES ('lock_budget_month', %s, %s, NULL, %s::jsonb, %s, %s)""",
+                        (f"budget lock {body.target_month}", body.canonical_manager,
+                         psycopg2.extras.Json({"locked_budget": str(budget),
+                                               "renewal_forecast": str(forecast),
+                                               "growth_target": str(target)}),
+                         body.reason, user.username))
+    return {"id": lock_id, "canonical_manager": body.canonical_manager,
+            "target_month": body.target_month, "locked_budget": budget,
+            "note": "This month's budget will not move if the forecast changes."}
+
+
+@router.post("/budget/unlock", tags=["budget"])
+def unlock_budget_month(body: LockBody, user=Depends(require_admin)):
+    """Release a locked month so it follows the forecast again."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE budget_lock SET active=false, unlocked_by=%s, unlocked_at=now(),
+                       unlock_reason=%s
+                WHERE canonical_manager=%s AND target_month=%s AND active
+                RETURNING locked_budget""",
+                        (user.username, body.reason, body.canonical_manager,
+                         body.target_month))
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(404, "that month is not locked")
+            cur.execute("""
+                INSERT INTO budget_audit (action, scope_description, canonical_manager,
+                    before_value, after_value, reason, performed_by)
+                VALUES ('unlock_budget_month', %s, %s, %s::jsonb, NULL, %s, %s)""",
+                        (f"budget unlock {body.target_month}", body.canonical_manager,
+                         psycopg2.extras.Json({"locked_budget": str(row[0])}),
+                         body.reason, user.username))
+    return {"canonical_manager": body.canonical_manager,
+            "target_month": body.target_month, "released_from": row[0]}
+
+
+@router.get("/budget/locks", tags=["budget"])
+def budget_locks(user=Depends(current_user)):
+    return {"items": fetch_all("""
+        SELECT id, canonical_manager, target_month, locked_budget,
+               locked_renewal_forecast, locked_growth_target, locked_growth_pct,
+               reason, locked_by, locked_at
+        FROM budget_lock WHERE active
+        ORDER BY canonical_manager, target_month"""),
+        "history": fetch_all("""
+        SELECT canonical_manager, target_month, locked_budget, locked_by, locked_at,
+               unlocked_by, unlocked_at, unlock_reason
+        FROM budget_lock WHERE NOT active ORDER BY unlocked_at DESC LIMIT 50"""),
+        "meta": meta()}
+
+
 @router.get("/budget/audit", tags=["budget"])
 def budget_audit(limit: int = Query(100, le=1000), offset: int = 0,
                  user=Depends(current_user)):
@@ -498,7 +598,23 @@ def budget_audit(limit: int = Query(100, le=1000), offset: int = 0,
 # --- exports ------------------------------------------------------------------
 
 EXPORTS = {
-    "managers": ("Account manager performance", None),
+    "managers": ("Account manager performance", """
+        SELECT a.canonical_manager, a.financial_year, a.financial_quarter,
+               a.period_month, a.positive_actual_income, a.absolute_return_income,
+               a.net_actual_income, a.actual_renewal_income, a.actual_new_business,
+               f.original_forecast, f.latest_forecast,
+               b.new_business_growth_target, b.total_budget,
+               r.renewal_income, r.renewal_achievement
+        FROM v_actual_month a
+        LEFT JOIN v_forecast_position_month f
+               ON f.canonical_manager = a.canonical_manager
+              AND f.forecast_month = a.period_month
+        LEFT JOIN v_monthly_budget b
+               ON b.canonical_manager = a.canonical_manager
+              AND b.forecast_month = a.period_month
+        LEFT JOIN v_renewal_income_month r
+               ON r.canonical_manager = a.canonical_manager
+              AND r.period_month = a.period_month"""),
     "policies": ("Policy-level renewals", """
         SELECT policy_id, forecast_month, client_code, policy_number, class_abbrev,
                underwriter_abbrev, expiry_date, original_manager, canonical_manager,
@@ -570,8 +686,13 @@ def export(dataset: str, fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
     title, base_sql = EXPORTS[dataset]
     if base_sql is None:
         raise HTTPException(400, "use /export/policies or another dataset")
-    view = base_sql.strip().split("FROM ")[-1].strip()
+    # Filter against the driving view's columns. Joined exports name their
+    # driving view first, so the split takes that rather than the last join.
+    view = base_sql.strip().split("FROM ")[1].split()[0].strip()
     where, params = f.clauses(columns_of(view))
+    if where:
+        where = where.replace(" WHERE ", " WHERE a.", 1) if view.startswith("v_actual") \
+            else where
     rows = fetch_all(f"{base_sql}{where}", params)
     settings = fetch_one("SELECT cut_off_date FROM reporting_settings WHERE id=1")
 

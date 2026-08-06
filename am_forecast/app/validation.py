@@ -43,11 +43,13 @@ ZERO_EXPECTED_EXPLANATION = (
 )
 
 # The base operating position, asserted on every test run.
+# July 2026 uses supplied per-manager forecast figures (see
+# scripts/set_month_forecast.py), which is why these differ from earlier quotes.
 BASE_POSITION = {
     "financial_year": 2026,
     "cut_off_date": "2026-07-31",
-    "original_renewal_forecast": Decimal("3701892.60"),
-    "total_budget": Decimal("3979534.55"),
+    "original_renewal_forecast": Decimal("3677092.30"),
+    "total_budget": Decimal("3952874.22"),
     "latest_outlook": Decimal("3676619.01"),
-    "remaining_budget_gap": Decimal("302915.54"),
+    "remaining_budget_gap": Decimal("276255.21"),
 }

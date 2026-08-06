@@ -58,10 +58,10 @@ def test_01_base_operating_position_reconciles(client):
     assert d["checks"]["cut_off_date"]
     assert d["is_base_state"], d["checks"]
     assert d["live"]["rounded"] == {
-        "original_renewal_forecast": "3701892.60",
-        "total_budget": "3979534.55",
+        "original_renewal_forecast": "3677092.30",
+        "total_budget": "3952874.22",
         "latest_outlook": "3676619.01",
-        "remaining_budget_gap": "302915.54",
+        "remaining_budget_gap": "276255.21",
     }
 
 
@@ -123,13 +123,19 @@ def test_05_unavailable_measures_are_null_not_zero(client):
         assert r["renewal_achievement"]["reason"]
 
 
-def test_05b_july_manager_exceptions_report_na(client):
+def test_05b_july_baseline_now_covers_every_manager(client):
+    """The prior-year baseline exists for everyone who traded last July.
+
+    Under the legacy dashboard baseline, Cameron Stewart, Dinghy Scheme and
+    Anastasia K had no July figure and reported N/A. Prior-year actual removes
+    that gap for anyone with prior-year income.
+    """
     rows = client.get("/api/managers?period=month&financial_year=2026"
                       "&include_non_ranked=true").json()["items"]
     july = {r["canonical_manager"]: r for r in rows if r["period_month"] == "2026-07-01"}
-    for name in ("Cameron Stewart", "Dinghy Scheme", "Anastasia K"):
-        if name in july:
-            assert not july[name]["renewal_achievement"]["available"], name
+    assert july
+    measurable = [r for r in july.values() if r["budget_achievement"]["available"]]
+    assert len(measurable) >= 12
 
 
 # --- 6. completed months have no Latest Forecast ------------------------------
@@ -148,15 +154,15 @@ def test_06_completed_month_has_no_latest_forecast(client, conn):
 
 # --- 7. July legacy baseline warning ------------------------------------------
 
-def test_07_july_legacy_baseline_is_declared(client, conn):
+def test_07_july_baseline_is_declared(client, conn):
     notes = " ".join(client.get("/api/business?financial_year=2026").json()["meta"]["notes"])
-    assert "legacy" in notes.lower()
+    assert "supplied per-manager forecast" in notes
     assert "August 2026" in notes
     baseline = client.get("/api/data-quality").json()["baselines"]
     july = next(b for b in baseline if b["forecast_month"] == "2026-07-01")
-    assert july["baseline_source"] == "Legacy Dashboard Forecast"
-    assert set(july["manager_exceptions"]) == {"Cameron Stewart", "Dinghy Scheme",
-                                               "Anastasia K"}
+    assert "Supplied figures" in july["baseline_source"]
+    # Prior-year actual exists for every manager, so no exceptions remain.
+    assert july["manager_exceptions"] == []
     # July must not claim policy-level original detail.
     assert scalar(conn, """SELECT count(*) FROM original_forecast
                            WHERE forecast_month = DATE '2026-07-01'
@@ -294,10 +300,17 @@ def test_15_lapse_reduces_net_but_yields_zero_renewal_income(client, conn):
 # --- 16 and 17. budget stability and scope ------------------------------------
 
 def test_16_changing_latest_forecast_does_not_change_budget(conn):
-    """Asserted structurally: budget derives from original_forecast alone."""
-    definition = scalar(conn, """SELECT pg_get_viewdef('v_budget_quarter', true)""")
-    assert "v_original_forecast_month" in definition
-    assert "v_latest_forecast" not in definition
+    """Budget derives from the frozen forecast alone.
+
+    Asserted across the whole view chain rather than one definition, since the
+    quarterly view now rolls up from the monthly one.
+    """
+    chain = " ".join(
+        scalar(conn, "SELECT pg_get_viewdef(%s, true)", (view,))
+        for view in ("v_budget_quarter", "v_monthly_budget"))
+    assert "v_original_forecast_month" in chain
+    assert "v_latest_forecast" not in chain
+    assert "forecast_policy" not in chain
 
 
 def test_17_budget_override_affects_only_its_scope(admin, conn):
@@ -433,3 +446,228 @@ def test_every_financial_page_states_gst(client):
         payload = client.get(path).json()
         blob = str(payload)
         assert "GST inclusive" in blob, path
+
+
+# --- per-manager detail -------------------------------------------------------
+
+def test_manager_detail_grid_shape(client):
+    """The AM sheet layout: transaction types by month, then forecast and budget."""
+    d = client.get("/api/managers/Sam%20Stewart/detail?financial_year=2026").json()
+    assert d["canonical_manager"] == "Sam Stewart"
+    assert len(d["months"]) == 12
+    assert d["months"][0] == "2026-07-01"
+    assert d["months"][-1] == "2027-06-01"
+    labels = [r["label"] for r in d["rows"]]
+    for expected in ("Renewal", "Transfer Renewal", "New Business",
+                     "Net Actual Income", "Renewal Forecast",
+                     "Growth % applied", "New Business Growth Target",
+                     "Total Budget", "Budget Achieved?",
+                     "% Above / (Below) Target", "$ Above / (Below) Target",
+                     "Prior Year Actual (same month)"):
+        assert expected in labels, expected
+
+
+def test_future_months_are_not_reported_as_unavailable(client):
+    """A month that has not started is 'future', never 'unavailable'.
+
+    Conflating the two made an early financial year look like a broken report.
+    """
+    d = client.get("/api/managers/Sam%20Stewart/detail?financial_year=2026").json()
+    assert d["month_status"][0] == "completed"      # July 2026
+    assert set(d["month_status"][1:]) == {"future"}
+
+    net = next(r for r in d["rows"] if r["label"] == "Net Actual Income")
+    assert net["cells"][0]["status"] == "actual"
+    for c in net["cells"][1:]:
+        assert c["status"] == "future"
+        assert c["value"] is None
+        assert "not started" in c["reason"]
+
+
+def test_manager_detail_reconciles_to_the_views(client, conn):
+    d = client.get("/api/managers/Sam%20Stewart/detail?financial_year=2026").json()
+    net = next(r for r in d["rows"] if r["label"] == "Net Actual Income")
+    assert cents(net["total"]) == cents(scalar(conn, """
+        SELECT SUM(net_actual_income) FROM v_actual_month
+        WHERE canonical_manager='Sam Stewart' AND financial_year=2026"""))
+    assert cents(d["ytd_actual"]["value"]) == cents(net["total"])
+
+    budget = next(r for r in d["rows"] if r["label"] == "Total Budget")
+    assert cents(budget["total"]) == cents(scalar(conn, """
+        SELECT SUM(total_budget) FROM v_monthly_budget
+        WHERE canonical_manager='Sam Stewart' AND financial_year=2026"""))
+
+
+def test_manager_detail_transaction_rows_sum_to_net(client):
+    """The grid must add up: transaction types sum to Net Actual Income."""
+    d = client.get("/api/managers/Sam%20Stewart/detail?financial_year=2026").json()
+    txn = [r for r in d["rows"] if r["kind"] == "transaction"]
+    total = sum(Decimal(str(r["total"])) for r in txn if r["total"] is not None)
+    net = next(r for r in d["rows"] if r["label"] == "Net Actual Income")
+    assert cents(total) == cents(net["total"])
+
+
+def test_comparison_table_marks_unstarted_periods(client):
+    rows = client.get("/api/managers?period=quarter&financial_year=2026").json()["items"]
+    q1 = [r for r in rows if r["financial_quarter"] == 1]
+    q4 = [r for r in rows if r["financial_quarter"] == 4]
+    assert all(r["has_started"] for r in q1)
+    assert not any(r["has_started"] for r in q4)
+
+
+def test_unknown_manager_is_rejected(client):
+    assert client.get("/api/managers/Nobody/detail").status_code == 404
+
+
+# --- analytics ----------------------------------------------------------------
+
+def test_year_over_year_is_like_for_like(client, conn):
+    """Prior year is cut at the same month, so a part year is never compared
+    with a full one."""
+    d = client.get("/api/analytics/year-over-year?financial_year=2026").json()
+    ytd = Decimal(str(d["ytd_actual"]["value"]))
+    prior = Decimal(str(d["ytd_prior_year"]["value"]))
+    assert cents(ytd) == cents(scalar(conn, """
+        SELECT SUM(net_actual_income) FROM v_actual_month
+        WHERE financial_year=2026 AND period_month <= DATE '2026-07-01'"""))
+    assert cents(prior) == cents(scalar(conn, """
+        SELECT SUM(net_actual_income) FROM v_actual_month
+        WHERE financial_year=2025 AND period_month <= DATE '2025-07-01'"""))
+    assert cents(Decimal(str(d["ytd_growth"]["value"]))) == cents(ytd - prior)
+
+
+def test_budget_verdict_states_over_or_under(client):
+    d = client.get("/api/analytics/year-over-year?financial_year=2026").json()
+    assert d["on_track"] in (True, False)
+    assert ("over" in d["verdict"]) or ("under" in d["verdict"])
+    assert "%" in d["verdict"]
+
+
+def test_future_months_carry_no_actual_in_the_series(client):
+    d = client.get("/api/analytics/year-over-year?financial_year=2026").json()
+    for m in d["months"]:
+        if not m["started"]:
+            assert m["net_actual"] is None, m["month"]
+
+
+def test_manager_matrix_totals_match_the_views(client, conn):
+    d = client.get("/api/analytics/manager-matrix?financial_year=2026"
+                   "&measure=net_actual&include_non_ranked=true").json()
+    assert cents(d["grand_total"]) == cents(scalar(conn, """
+        SELECT SUM(net_actual_income) FROM v_actual_month WHERE financial_year=2026"""))
+    for r in d["rows"]:
+        row_sum = sum(Decimal(str(c["value"])) for c in r["cells"] if c["value"] is not None)
+        if r["total"] is not None:
+            assert cents(row_sum) == cents(r["total"]), r["canonical_manager"]
+
+
+def test_return_analysis_shares_sum_to_one(client, conn):
+    d = client.get("/api/analytics/return-income").json()
+    total = Decimal(str(d["total_return_income"]))
+    parts = sum(Decimal(str(i["amount"])) for i in d["items"])
+    assert cents(parts) == cents(total)
+    shares = sum(Decimal(str(i["share_of_returns"])) for i in d["items"])
+    assert abs(shares - 1) < Decimal("0.0001")
+    assert cents(total) == cents(scalar(conn, """
+        SELECT SUM(absolute_return_income) FROM v_actual_month"""))
+
+
+def test_return_rate_relates_returns_to_positive_income(client):
+    d = client.get("/api/analytics/return-income").json()
+    expected = Decimal(str(d["total_return_income"])) / Decimal(str(d["positive_income"]))
+    assert abs(Decimal(str(d["return_rate"])) - expected) < Decimal("0.000001")
+
+
+def test_manager_growth_override_changes_only_that_manager(admin, conn):
+    """The per-manager growth control must not move anyone else's budget."""
+    before = {r["canonical_manager"]: r["total_budget"] for r in
+              admin.get("/api/budget?financial_year=2026").json()["quarters"]
+              if r["financial_quarter"] == 2}
+    res = admin.post("/api/budget/growth-rate", json={
+        "scope": "manager", "canonical_manager": "Liam Thornton",
+        "financial_year": 2026, "growth_pct": 0.15,
+        "reason": "per-manager control test"})
+    assert res.status_code == 200
+    try:
+        after = {r["canonical_manager"]: r["total_budget"] for r in
+                 admin.get("/api/budget?financial_year=2026").json()["quarters"]
+                 if r["financial_quarter"] == 2}
+        assert after["Liam Thornton"] > before["Liam Thornton"]
+        for name, value in before.items():
+            if name != "Liam Thornton":
+                assert after[name] == value, name
+        # The Original Forecast must be untouched by a budget change.
+        assert cents(scalar(conn, """SELECT SUM(forecast_contribution)
+                                     FROM original_forecast
+                                     WHERE financial_year=2026""")) == Decimal("3677092.30")
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("""DELETE FROM growth_rate WHERE created_by='pytest-admin'""")
+            cur.execute("DELETE FROM budget_audit WHERE performed_by='pytest-admin'")
+        conn.commit()
+
+
+# --- achievement measured on elapsed months -----------------------------------
+
+def test_achievement_uses_budget_for_elapsed_months_only(client):
+    """A quarter one month in is measured against one month of budget.
+
+    Comparing July actuals with a whole-quarter budget reported every manager at
+    roughly a third of target, which is arithmetic rather than performance.
+    """
+    rows = client.get("/api/managers?period=quarter&financial_year=2026").json()["items"]
+    q1 = [r for r in rows if r["financial_quarter"] == 1 and r["has_started"]]
+    assert q1
+    measured = 0
+    for r in q1:
+        assert r["months_elapsed"] == 1
+        if not (r["budget_to_date"]["available"] and r["total_budget"]["available"]):
+            continue  # a manager with no budget for the quarter
+        measured += 1
+        assert (Decimal(str(r["budget_to_date"]["value"]))
+                < Decimal(str(r["total_budget"]["value"]))), r["canonical_manager"]
+        expected = (Decimal(str(r["net_actual_income"]["value"]))
+                    / Decimal(str(r["budget_to_date"]["value"])))
+        assert abs(Decimal(str(r["budget_achievement"]["value"])) - expected) < Decimal("0.0001")
+    assert measured >= 10
+
+
+def test_budget_verdict_is_explicit(client):
+    rows = client.get("/api/managers?period=quarter&financial_year=2026").json()["items"]
+    started = [r for r in rows if r["has_started"]]
+    assert started
+    for r in started:
+        assert r["budget_verdict"] in ("Made budget", "Below budget", "Not measurable")
+        if r["budget_verdict"] == "Made budget":
+            assert Decimal(str(r["over_or_under_pct"]["value"])) >= 0
+        elif r["budget_verdict"] == "Below budget":
+            assert Decimal(str(r["over_or_under_pct"]["value"])) < 0
+
+
+def test_renewal_achievement_no_longer_requires_policy_matching(client, conn):
+    """Manager-month renewal achievement works from the first upload."""
+    rows = client.get("/api/managers?period=quarter&financial_year=2026").json()["items"]
+    started = [r for r in rows if r["has_started"]]
+    measurable = [r for r in started if r["renewal_achievement"]["available"]]
+    assert len(measurable) >= 10, "renewal achievement should be broadly available"
+
+    sam = next(r for r in started if r["canonical_manager"] == "Sam Stewart")
+    expected = scalar(conn, """
+        SELECT renewal_achievement FROM v_renewal_income_month
+        WHERE canonical_manager='Sam Stewart' AND period_month = DATE '2026-07-01'""")
+    assert abs(Decimal(str(sam["renewal_achievement"]["value"])) - expected) < Decimal("0.0001")
+
+
+def test_renewal_income_reconciles_to_transactions(conn):
+    total = scalar(conn, """SELECT SUM(renewal_income) FROM v_renewal_income_month
+                            WHERE financial_year = 2026""")
+    assert cents(total) == cents(scalar(conn, """
+        SELECT SUM(actual_income) FROM v_sales_reported
+        WHERE financial_year = 2026 AND category IN ('RWL','TRW')"""))
+
+
+def test_started_periods_sort_before_unstarted(client):
+    rows = client.get("/api/managers?period=quarter&financial_year=2026").json()["items"]
+    first_unstarted = next((i for i, r in enumerate(rows) if not r["has_started"]), len(rows))
+    assert all(r["has_started"] for r in rows[:first_unstarted])
+    assert not any(r["has_started"] for r in rows[first_unstarted:])

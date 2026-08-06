@@ -10,6 +10,8 @@
  * Nothing here recalculates a financial figure. Formatting only.
  */
 export const NA = "N/A";
+/** A month that has not happened yet. Distinct from N/A, which means unknown. */
+export const NOT_YET = "\u2014";
 export const GST_NOTE = "All income figures are GST inclusive.";
 const AUD = new Intl.NumberFormat("en-AU", {
     style: "currency",
@@ -25,6 +27,12 @@ export function money(m) {
     if (Number.isNaN(n))
         return NA;
     return n < 0 ? `(${AUD.format(Math.abs(n))})` : AUD.format(n);
+}
+/** True when a measure is a real, negative number. Drives the red styling. */
+export function isNegative(m) {
+    if (!m || !m.available || m.value === null || m.value === undefined)
+        return false;
+    return Number(m.value) < 0;
 }
 /** Format a percentage. Never substitutes 0% for unavailable. */
 export function percent(r, digits = 1) {
@@ -83,6 +91,13 @@ function loadIdentity() {
     }
     return { user: "sam", role: "viewer" };
 }
+/**
+ * Identity is held in localStorage, not just in memory.
+ *
+ * The role selector reloads the page so every query refetches, which wiped an
+ * in-memory value before it was ever used and silently reset the role to
+ * viewer on every change.
+ */
 let session = loadIdentity();
 export function currentIdentity() {
     return session;
@@ -114,10 +129,24 @@ async function request(path, init) {
 }
 export const api = {
     session: () => request("/api/session"),
+    periods: () => request("/api/periods"),
+    mappings: () => request("/api/reference/mappings"),
     basePosition: () => request("/api/base-position"),
     reference: () => request("/api/reference"),
     business: (fy) => request(`/api/business?financial_year=${fy}`),
+    yearOverYear: (fy, manager) => request(`/api/analytics/year-over-year?financial_year=${fy}` +
+        (manager ? `&manager=${encodeURIComponent(manager)}` : "")),
+    managerMatrix: (fy, measure, includeNonRanked) => request(`/api/analytics/manager-matrix?financial_year=${fy}` +
+        `&measure=${measure}&include_non_ranked=${includeNonRanked}`),
+    returnAnalysis: (fy, manager) => request("/api/analytics/return-income" +
+        (fy ? `?financial_year=${fy}` : "?") +
+        (manager ? `&manager=${encodeURIComponent(manager)}` : "")),
+    managerDetail: (manager, fy) => request(`/api/managers/${encodeURIComponent(manager)}/detail?financial_year=${fy}`),
     managers: (params) => request(`/api/managers?${params}`),
+    bonus: (fy) => request(`/api/bonus?financial_year=${fy}`),
+    bonusForManager: (manager, fy) => request(`/api/bonus/${encodeURIComponent(manager)}?financial_year=${fy}`),
+    forecastHistory: (manager, fy) => request(`/api/forecast-history?manager=${encodeURIComponent(manager)}` +
+        `&financial_year=${fy}`),
     forecastMovement: (params) => request(`/api/forecast-movement?${params}`),
     returnIncome: (params) => request(`/api/return-income?${params}`),
     newBusiness: (params) => request(`/api/new-business?${params}`),
@@ -132,3 +161,38 @@ export const api = {
     post: (path, body) => request(path, { method: "POST", body: JSON.stringify(body) }),
     exportUrl: (dataset, fmt, params) => `/api/export/${dataset}?fmt=${fmt}&${params}`,
 };
+/**
+ * Format a grid cell.
+ *
+ * Three outcomes, deliberately distinct:
+ *   actual      -> the number
+ *   future      -> an em dash; the month has not happened
+ *   unavailable -> N/A; we cannot say
+ *
+ * Showing a future month as N/A made the manager screen look broken when it was
+ * merely early in the financial year.
+ */
+export function cell(c, kind = "money") {
+    if (c.status === "future")
+        return NOT_YET;
+    if (c.status === "unavailable" || c.value === null)
+        return NA;
+    if (kind === "verdict")
+        return Number(c.value) >= 1 ? "YES" : "NO";
+    if (kind === "percent") {
+        const n = Number(c.value);
+        // Above/below rows read better with an explicit sign.
+        return n > 0 ? `+${percent({ value: n, available: true })}`
+            : percent({ value: n, available: true });
+    }
+    if (kind === "count")
+        return String(Math.round(Number(c.value)));
+    return money({ value: c.value, available: true });
+}
+export function cellTitle(c) {
+    if (c.status === "future")
+        return "This month has not started yet.";
+    if (c.status === "unavailable")
+        return c.reason ?? "Not available";
+    return undefined;
+}

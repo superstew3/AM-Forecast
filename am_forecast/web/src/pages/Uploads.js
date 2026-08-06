@@ -25,8 +25,30 @@ export default function Uploads() {
     });
     const decide = useMutation({
         mutationFn: ({ path, payload }) => api.post(path, payload),
-        onSuccess: () => { setPreview(null); qc.invalidateQueries({ queryKey: ["uploads"] }); },
+        onSuccess: () => { setPreview(null); qc.invalidateQueries(); },
     });
+    /**
+     * A pending batch stays actionable from history.
+     *
+     * Accept and Reject used to appear only beside a freshly staged preview, so
+     * anything that cleared the screen — a reload, changing role — stranded the
+     * batch as pending with no way to act on it.
+     */
+    const actions = (r) => {
+        if (r.status === "pending") {
+            return (_jsxs("span", { className: "row-actions", children: [_jsx("button", { onClick: () => decide.mutate({
+                            path: `/api/uploads/${r.id}/accept`, payload: {}
+                        }), children: "Accept" }), _jsx("button", { disabled: reason.length < 3, title: reason.length < 3 ? "Enter a reason above first" : undefined, onClick: () => decide.mutate({
+                            path: `/api/uploads/${r.id}/reject`, payload: { reason }
+                        }), children: "Reject" })] }));
+        }
+        if (r.status === "accepted") {
+            return (_jsx("button", { disabled: reason.length < 3, title: reason.length < 3 ? "Enter a reason above first" : undefined, onClick: () => decide.mutate({
+                    path: `/api/uploads/${r.id}/rollback`, payload: { reason }
+                }), children: "Roll back" }));
+        }
+        return _jsx("span", { className: "not-yet", children: "\u2014" });
+    };
     return (_jsxs(_Fragment, { children: [_jsx("h1", { children: "Uploads and audit history" }), _jsx(GstBanner, {}), _jsxs(Panel, { title: "Upload a report", subtitle: "Prepare stages and previews the file without touching any reported figure. The numbers below are exactly what will land on accept.", children: [_jsxs("div", { className: "form-row", children: [_jsx("input", { type: "file", ref: fileRef, accept: ".csv,.xlsx" }), _jsx("button", { disabled: stage.isPending, onClick: () => {
                                     const f = fileRef.current?.files?.[0];
                                     if (f)
@@ -37,7 +59,7 @@ export default function Uploads() {
                                         }), children: "Accept these exact figures" }), _jsx("button", { disabled: reason.length < 3, onClick: () => decide.mutate({
                                             path: `/api/uploads/${preview.batch_id}/reject`,
                                             payload: { reason }
-                                        }), children: "Reject" })] }), decide.isError && _jsx(Failed, { error: decide.error })] }))] }), _jsxs(Panel, { title: "Batch history", children: [q.isLoading && _jsx(Loading, { what: "upload history" }), q.data && (_jsx(DataTable, { caption: "upload batches", rows: q.data.items, columns: [
+                                        }), children: "Reject" })] }), decide.isError && _jsx(Failed, { error: decide.error })] }))] }), _jsxs(Panel, { title: "Batch history", subtitle: "A pending batch can be accepted or rejected from here at any time. An accepted batch can be rolled back; rollback reverses it exactly and leaves other uploads untouched.", children: [_jsxs("label", { className: "reason", children: ["Reason (required to reject or roll back)", _jsx("input", { value: reason, onChange: (e) => setReason(e.target.value) })] }), q.isLoading && _jsx(Loading, { what: "upload history" }), q.data && (_jsx(DataTable, { caption: "upload batches", rows: q.data.items, columns: [
                             { key: "id", label: "Batch" },
                             { key: "file_name", label: "File" },
                             { key: "file_type", label: "Detected type" },
@@ -64,5 +86,6 @@ export default function Uploads() {
                                 render: (r) => new Date(r.uploaded_at).toLocaleString("en-AU") },
                             { key: "rollback_reason", label: "Rollback",
                                 render: (r) => r.rollback_reason ?? "\u2014" },
+                            { key: "actions", label: "Action", render: actions },
                         ] }))] })] }));
 }

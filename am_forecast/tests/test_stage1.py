@@ -191,8 +191,9 @@ def test_july_original_comes_from_legacy_not_actuals(conn):
         FROM original_forecast WHERE forecast_month = DATE '2026-07-01'
         GROUP BY 1,2""")[0]
     assert grain == "manager_month"
-    assert origin == "legacy_dashboard"
-    assert abs(amount - Decimal("348149.67")) <= CENT
+    assert origin == "manual_entry"
+    # Supplied per-manager figures for July 2026.
+    assert abs(amount - Decimal("323349.37")) <= CENT
 
 
 def test_no_original_forecast_is_derived_from_actuals(conn):
@@ -214,15 +215,22 @@ def test_july_residual_pending_policies_not_in_original(conn):
 
 
 def test_achievement_is_null_not_zero_where_baseline_unusable(conn):
-    """The core of the July decision: N/A, never 0%."""
-    for manager in ("Cameron Stewart", "Dinghy Scheme"):
-        achievement, usable = rows(conn, """
+    """N/A, never 0%.
+
+    Tested on FY2025-26 months before November 2025, which have no baseline at
+    all. July 2026 used to serve this purpose, but since the July baseline moved
+    to prior-year actual it covers every manager and no longer demonstrates the
+    rule.
+    """
+    for month in ("2025-07-01", "2025-08-01", "2025-09-01", "2025-10-01"):
+        rows_ = rows(conn, """
             SELECT renewal_achievement, baseline_usable
             FROM v_renewal_performance_month
-            WHERE period_month = DATE '2026-07-01' AND canonical_manager = %s""",
-                                   (manager,))[0]
-        assert usable is False
-        assert achievement is None
+            WHERE period_month = %s""", (month,))
+        assert rows_, month
+        for achievement, usable in rows_:
+            assert usable is False, month
+            assert achievement is None, month
 
 
 def test_achievement_is_computed_where_baseline_usable(conn):
@@ -249,16 +257,26 @@ def test_budget_is_forecast_plus_growth(conn):
         SELECT SUM(original_renewal_forecast), SUM(new_business_growth_target),
                SUM(total_budget)
         FROM v_budget_quarter WHERE financial_year = 2026""")[0]
-    assert abs(orig - Decimal("3701892.60")) <= CENT
+    assert abs(orig - Decimal("3677092.30")) <= CENT
     assert abs(target - orig * Decimal("0.075")) <= Decimal("0.10")
     assert abs(total - (orig + target)) <= CENT
 
 
 def test_anastasia_in_totals_but_not_budget_or_rankings(conn):
+    """Income counts; achievement stays N/A.
+
+    She now carries an explicit July forecast of $0.00, so a budget row exists
+    at zero. What matters is unchanged: a zero denominator yields NULL, not 0%,
+    so she is never reported as having failed.
+    """
     assert scalar(conn, """SELECT SUM(net_actual_income) FROM v_actual_month
                            WHERE canonical_manager = 'Anastasia K'""") > 0
-    assert scalar(conn, """SELECT count(*) FROM v_budget_quarter
+    assert scalar(conn, """SELECT COALESCE(SUM(total_budget), 0)
+                           FROM v_budget_quarter
                            WHERE canonical_manager = 'Anastasia K'""") == 0
+    assert scalar(conn, """SELECT bool_or(renewal_achievement IS NOT NULL)
+                           FROM v_renewal_income_month
+                           WHERE canonical_manager = 'Anastasia K'""") in (False, None)
     assert scalar(conn, """SELECT include_in_rankings FROM reporting_manager
                            WHERE canonical_manager = 'Anastasia K'""") is False
     assert scalar(conn, """SELECT include_in_business_totals FROM reporting_manager

@@ -31,8 +31,20 @@ export default function Review() {
 
   return (
     <>
-      <h1>Matching review queue</h1>
+      <h1>Matching review <span className="fy">forecast to actual</span></h1>
       <GstBanner meta={d.meta} />
+      <div className="purpose">
+        <strong>What this page is for.</strong> Linking each forecast policy to
+        the transaction that renewed it, so renewal achievement can be measured
+        policy by policy. Most links are made automatically; this queue is only
+        the ones the system will not decide on its own.
+        {c.actionable < 20 && (
+          <> <em>Right now there is very little here, and that is expected.</em>{" "}
+          Matching needs a forecast period that overlaps transacted actuals, and
+          you currently have only July 2026 with two policies. This page becomes
+          useful once a second Renewals Pending file is loaded.</>
+        )}
+      </div>
 
       <Panel title="Queue composition"
              subtitle="Only the first group needs individual decisions. The other two are bulk artefacts with a known cause and are separated so they cannot bury the real exceptions.">

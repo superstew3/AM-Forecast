@@ -14,7 +14,12 @@ from ..validation import BASE_POSITION, TOLERANCE as CENT
 from .core import (
     GST_NOTE, TIMEZONE, User, current_user, fetch_all, fetch_one, meta, to_cents,
 )
+from .analytics import router as analytics_router
+from .bonus import router as bonus_router
+from .forecast_history import router as forecast_history_router
+from .manager_detail import router as manager_detail_router
 from .operations import router as operations_router
+from .settings import router as settings_router
 from .reporting import router as reporting_router
 
 app = FastAPI(
@@ -29,6 +34,11 @@ app = FastAPI(
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"])
 app.include_router(reporting_router, prefix="/api")
+app.include_router(manager_detail_router, prefix="/api")
+app.include_router(analytics_router, prefix="/api")
+app.include_router(settings_router, prefix="/api")
+app.include_router(forecast_history_router, prefix="/api")
+app.include_router(bonus_router, prefix="/api")
 app.include_router(operations_router, prefix="/api")
 
 

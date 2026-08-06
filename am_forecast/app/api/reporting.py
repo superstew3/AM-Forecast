@@ -18,8 +18,8 @@ router = APIRouter()
 
 # Reasons attached to unavailable measures, so the interface can explain rather
 # than just blank the cell.
-NO_BASELINE = ("No usable Original Forecast baseline for this period, so "
-               "achievement cannot be calculated.")
+NO_BASELINE = ("No renewal forecast recorded for this period, so achievement "
+               "cannot be calculated.")
 NO_LATEST = ("This month is complete and reports actuals. A completed month has "
              "no Latest Forecast.")
 NO_BUDGET = ("No budget applies: this manager has no Original Renewal Forecast "
@@ -63,8 +63,8 @@ def business(financial_year: int = Query(2026), user=Depends(current_user)):
         notes.append(row["period_label"] or "Partial period: not a full financial year.")
     if financial_year == 2026:
         notes.append(
-            "July 2026 has a legacy manager-month baseline, not policy-level detail. "
-            "Policy-level renewal achievement is reliable from August 2026 onward.")
+            "July 2026 uses supplied per-manager forecast figures, held at "
+            "manager-month level. Policy-level renewal detail begins August 2026.")
     return BusinessSummary(
         financial_year=row["financial_year"],
         coverage_status=row["coverage_status"], period_label=row["period_label"],
@@ -110,9 +110,16 @@ class ManagerRow(BaseModel):
     actual_new_business: Money
     latest_outlook: Money
     remaining_budget_gap: Money
-    retention_by_income: Ratio
-    retention_by_policy_count: Ratio
+    renewal_income: Money
+    renewal_forecast: Money
+    budget_to_date: Money
+    months_elapsed: int = 0
+    budget_verdict: str
+    over_or_under_pct: Ratio
     baseline_note: str | None = None
+    # A period that has not started is not "unavailable" — it simply has not
+    # happened. The interface renders an em dash for these, not N/A.
+    has_started: bool = True
 
 
 class ManagerResponse(BaseModel):
@@ -141,9 +148,11 @@ bud AS (
     FROM v_monthly_budget
 ),
 perf AS (
-    SELECT canonical_manager, forecast_month, renewal_achievement,
-           retention_by_income, retention_by_policy_count
-    FROM v_renewal_outcome_performance
+    -- Manager-month renewal achievement. Does not depend on policy-level
+    -- matching, so it works from the first upload.
+    SELECT canonical_manager, period_month AS forecast_month, renewal_achievement,
+           renewal_income, original_forecast AS renewal_forecast
+    FROM v_renewal_income_month
 ),
 base AS (
     SELECT COALESCE(a.canonical_manager, f.canonical_manager, b.canonical_manager)
@@ -156,7 +165,7 @@ base AS (
            a.positive_actual_income, a.absolute_return_income, a.net_actual_income,
            a.actual_new_business,
            b.new_business_growth_target, b.total_budget,
-           p.renewal_achievement, p.retention_by_income, p.retention_by_policy_count
+           p.renewal_achievement, p.renewal_income, p.renewal_forecast
     FROM act a
     FULL OUTER JOIN fcst f ON f.canonical_manager = a.canonical_manager
                           AND f.forecast_month = a.period_month
@@ -177,7 +186,7 @@ LEFT JOIN forecast_baseline fb ON fb.forecast_month = base.period_month
 """
 
 
-def _aggregate(rows: list[dict], period: str) -> list[dict]:
+def _aggregate(rows: list[dict], period: str, cut_month) -> list[dict]:
     """Roll monthly rows up to quarter, year-to-date or full year.
 
     Sums are over NULL-tolerant addition: a NULL component leaves the total NULL
@@ -210,6 +219,22 @@ def _aggregate(rows: list[dict], period: str) -> list[dict]:
                 acc[field] = (acc.get(field) or 0) + v
             else:
                 acc.setdefault(field, None)
+
+        # Budget and forecast for the months that have actually happened.
+        # A quarter one month in must be measured against one month of budget,
+        # not three. Comparing July actuals with a whole-quarter budget reported
+        # every manager at roughly a third of target, which is arithmetic, not
+        # performance.
+        if r["period_month"] and r["period_month"] <= cut_month:
+            for field, dest in (("total_budget", "budget_to_date"),
+                                ("original_forecast", "forecast_to_date")):
+                v = r.get(field)
+                if v is not None:
+                    acc[dest] = (acc.get(dest) or 0) + v
+            acc["months_elapsed"] = acc.get("months_elapsed", 0) + 1
+        acc.setdefault("budget_to_date", None)
+        acc.setdefault("forecast_to_date", None)
+        acc.setdefault("months_elapsed", 0)
         usable = bool(r.get("baseline_usable"))
         acc["_any_baseline"] = acc["_any_baseline"] or usable
         acc["_all_baseline"] = acc["_all_baseline"] and usable
@@ -245,30 +270,62 @@ def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"
         rows = [r for r in rows if r["period_month"] and r["period_month"] <= cut]
 
     grain = "month" if period == "month" else ("quarter" if period == "quarter" else "year")
-    aggregated = _aggregate(rows, grain)
+    aggregated = _aggregate(rows, grain, cut)
 
     outlook = {(r["canonical_manager"], r["financial_quarter"]): r
                for r in fetch_all("""SELECT canonical_manager, financial_quarter,
                                             latest_outlook, remaining_budget_gap
                                      FROM v_outlook_quarter
                                      WHERE financial_year = %(fy)s""", params)}
-    perf = {(r["canonical_manager"], r["forecast_month"]): r
-            for r in fetch_all("""SELECT canonical_manager, forecast_month,
-                                         renewal_achievement, retention_by_income,
-                                         retention_by_policy_count
-                                  FROM v_renewal_outcome_performance""")}
+    # Renewal achievement is aggregated over the same grain as the row, so a
+    # quarterly row compares quarterly renewal income with quarterly forecast
+    # rather than borrowing a single month's ratio.
+    grain_cols = {"month": "period_month",
+                  "quarter": "financial_quarter",
+                  "ytd": "financial_year",
+                  "year": "financial_year"}[period]
+    renewal_rows = fetch_all(f"""
+        SELECT canonical_manager, {grain_cols} AS bucket,
+               SUM(renewal_income) AS renewal_income,
+               SUM(original_forecast) AS renewal_forecast,
+               safe_div(SUM(renewal_income), SUM(original_forecast)) AS renewal_achievement,
+               bool_or(period_started) AS started
+        FROM v_renewal_income_month
+        WHERE financial_year = %(fy)s AND period_started
+        GROUP BY 1, 2""", {"fy": financial_year})
+    perf = {(r["canonical_manager"], r["bucket"]): r for r in renewal_rows}
+
+    def started(row) -> bool:
+        if period == "month":
+            return bool(row["period_month"]) and row["period_month"] <= cut
+        if period == "quarter":
+            months = [m for m in (r["period_month"] for r in rows)
+                      if m and r_quarter(m) == row["financial_quarter"]]
+            return any(m <= cut for m in months) if months else False
+        return True
+
+    def r_quarter(m):
+        return ((m.month - 7) % 12) // 3 + 1
 
     items = []
-    for a in sorted(aggregated, key=lambda x: -(x.get("total_budget") or 0)):
+    for a in sorted(aggregated,
+                    key=lambda x: (not started(x), -(x.get("total_budget") or 0))):
         o = outlook.get((a["canonical_manager"], a["financial_quarter"]), {})
-        p = perf.get((a["canonical_manager"], a["period_month"]), {})
+        bucket = (a["period_month"] if period == "month"
+                  else a["financial_quarter"] if period == "quarter"
+                  else a["financial_year"])
+        p = perf.get((a["canonical_manager"], bucket), {})
         budget = a.get("total_budget")
+        # Measured against the budget for the months elapsed, not the whole period.
+        budget_measured = a.get("budget_to_date")
         net = a.get("net_actual_income")
         baseline_ok = a["_any_baseline"]
-        variance = (net - budget) if (budget is not None and net is not None
-                                      and baseline_ok) else None
-        achievement = (net / budget) if (budget not in (None, 0) and net is not None
-                                         and baseline_ok) else None
+        variance = (net - budget_measured) if (budget_measured is not None
+                                               and net is not None
+                                               and baseline_ok) else None
+        achievement = (net / budget_measured) if (budget_measured not in (None, 0)
+                                                  and net is not None
+                                                  and baseline_ok) else None
         items.append(ManagerRow(
             canonical_manager=a["canonical_manager"], status=a["status"],
             include_in_rankings=a["include_in_rankings"],
@@ -290,10 +347,17 @@ def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"
             actual_new_business=Money.of(a.get("actual_new_business")),
             latest_outlook=Money.of(o.get("latest_outlook")),
             remaining_budget_gap=Money.of(o.get("remaining_budget_gap"), NO_BUDGET),
-            retention_by_income=Ratio.of(p.get("retention_by_income"), NO_BASELINE),
-            retention_by_policy_count=Ratio.of(p.get("retention_by_policy_count"),
-                                               NO_BASELINE),
-            baseline_note=a.get("baseline_note")))
+            renewal_income=Money.of(p.get("renewal_income")),
+            renewal_forecast=Money.of(p.get("renewal_forecast"), NO_BASELINE),
+            budget_to_date=Money.of(budget_measured, NO_BUDGET),
+            months_elapsed=a.get("months_elapsed", 0),
+            budget_verdict=(
+                "Not measurable" if achievement is None
+                else "Made budget" if achievement >= 1 else "Below budget"),
+            over_or_under_pct=Ratio.of(
+                (achievement - 1) if achievement is not None else None, NO_BUDGET),
+            baseline_note=a.get("baseline_note"),
+            has_started=started(a)))
     return ManagerResponse(items=items, total=len(items), meta=meta(financial_year))
 
 

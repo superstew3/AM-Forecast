@@ -14,9 +14,12 @@ export function Value({ m, kind = "money", digits }: {
     kind === "percent" ? percent(m as Ratio, digits) :
     kind === "count" ? (unavailable ? NA : String(m!.value)) :
     money(m as Money);
+  // Negatives read red as well as bracketed. Brackets alone are easy to miss in
+  // a dense grid, and a return is the thing you most want to notice.
+  const negative = !unavailable && Number(m!.value) < 0;
   return (
     <span
-      className={unavailable ? "na" : "val"}
+      className={unavailable ? "na" : `val${negative ? " negative" : ""}`}
       title={unavailable ? (reasonFor(m) ?? "Not available") : undefined}
       data-available={!unavailable}
     >
@@ -144,11 +147,21 @@ export function DataTable({ columns, rows, serverTotals, caption, onRowClick }: 
             <tr key={row.id ?? row.policy_id ?? row.canonical_manager ?? i}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={onRowClick ? "clickable" : ""}>
-              {columns.map((c) => (
-                <td key={c.key} className={c.align === "right" ? "right" : ""}>
-                  {c.render ? c.render(row) : String(row[c.key] ?? NA)}
-                </td>
-              ))}
+              {columns.map((c) => {
+                const rendered = c.render ? c.render(row) : String(row[c.key] ?? NA);
+                // Negatives read red as well as bracketed. Brackets alone are
+                // easy to miss in a dense grid, and a return is the thing you
+                // most want to notice.
+                const negative = typeof rendered === "string"
+                  && /^\(\s*[$-]/.test(rendered.trim());
+                return (
+                  <td key={c.key}
+                      className={`${c.align === "right" ? "right" : ""}${
+                        negative ? " negative" : ""}`}>
+                    {rendered}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
@@ -173,13 +186,13 @@ export function BaselineWarning({ month, source, exceptions }: {
 }) {
   return (
     <div className="warning" role="note">
-      <strong>{month} uses a mixed baseline.</strong>{" "}
-      Original Forecast comes from the {source ?? "Legacy Dashboard Forecast"} at
-      manager-month level, not policy level. Actuals come from Sales Transactions.
-      The two residual pending policies belong to Latest Forecast only.
-      Policy-level renewal achievement is reliable from August 2026 onward.
+      <strong>{month} uses supplied forecast figures.</strong>{" "}
+      {source ?? "A forecast per manager was entered directly"}, held at
+      manager-month level, because the Renewals Pending file was extracted after
+      most of that month's renewals had already transacted. Actuals come from
+      Sales Transactions. Policy-level renewal detail begins August 2026.
       {exceptions?.length ? (
-        <> No baseline is available for {exceptions.join(", ")}, which show N/A.</>
+        <> No forecast is recorded for {exceptions.join(", ")}, which show N/A.</>
       ) : null}
     </div>
   );

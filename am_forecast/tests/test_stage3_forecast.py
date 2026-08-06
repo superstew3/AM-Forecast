@@ -246,8 +246,15 @@ def test_allocation_is_forecast_weighted_not_equal(conn):
     nov = result[[k for k in result if k.month == 11][0]]
     dec_ = result[[k for k in result if k.month == 12][0]]
     assert nov > dec_ * 2
-    assert scalar(conn, """SELECT count(*) FROM v_monthly_budget
-                           WHERE allocation_method <> 'forecast_weighted'""") == 0
+
+    # The target must track each month's own forecast rather than a flat share
+    # of the quarter. Asserted on the arithmetic, not on an internal label.
+    for month, forecast, target, pct in rows(conn, """
+            SELECT forecast_month, original_forecast, calculated_growth_target,
+                   growth_pct
+            FROM v_monthly_budget
+            WHERE financial_year = 2026 AND growth_pct IS NOT NULL"""):
+        assert abs(target - forecast * pct) < Decimal("0.01"), month
 
 
 def test_monthly_override_replaces_calculated_target(conn):

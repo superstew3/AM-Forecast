@@ -26,8 +26,45 @@ export default function Uploads() {
 
   const decide = useMutation({
     mutationFn: ({ path, payload }: any) => api.post(path, payload),
-    onSuccess: () => { setPreview(null); qc.invalidateQueries({ queryKey: ["uploads"] }); },
+    onSuccess: () => { setPreview(null); qc.invalidateQueries(); },
   });
+
+  /**
+   * A pending batch stays actionable from history.
+   *
+   * Accept and Reject used to appear only beside a freshly staged preview, so
+   * anything that cleared the screen — a reload, changing role — stranded the
+   * batch as pending with no way to act on it.
+   */
+  const actions = (r: any) => {
+    if (r.status === "pending") {
+      return (
+        <span className="row-actions">
+          <button onClick={() => decide.mutate({
+                    path: `/api/uploads/${r.id}/accept`, payload: {} })}>
+            Accept
+          </button>
+          <button disabled={reason.length < 3}
+                  title={reason.length < 3 ? "Enter a reason above first" : undefined}
+                  onClick={() => decide.mutate({
+                    path: `/api/uploads/${r.id}/reject`, payload: { reason } })}>
+            Reject
+          </button>
+        </span>
+      );
+    }
+    if (r.status === "accepted") {
+      return (
+        <button disabled={reason.length < 3}
+                title={reason.length < 3 ? "Enter a reason above first" : undefined}
+                onClick={() => decide.mutate({
+                  path: `/api/uploads/${r.id}/rollback`, payload: { reason } })}>
+          Roll back
+        </button>
+      );
+    }
+    return <span className="not-yet">—</span>;
+  };
 
   return (
     <>
@@ -79,7 +116,12 @@ export default function Uploads() {
         )}
       </Panel>
 
-      <Panel title="Batch history">
+      <Panel title="Batch history"
+             subtitle="A pending batch can be accepted or rejected from here at any time. An accepted batch can be rolled back; rollback reverses it exactly and leaves other uploads untouched.">
+        <label className="reason">
+          Reason (required to reject or roll back)
+          <input value={reason} onChange={(e) => setReason(e.target.value)} />
+        </label>
         {q.isLoading && <Loading what="upload history" />}
         {q.data && (
           <DataTable
@@ -112,6 +154,7 @@ export default function Uploads() {
                 render: (r: any) => new Date(r.uploaded_at).toLocaleString("en-AU") },
               { key: "rollback_reason", label: "Rollback",
                 render: (r: any) => r.rollback_reason ?? "\u2014" },
+              { key: "actions", label: "Action", render: actions },
             ]}
           />
         )}

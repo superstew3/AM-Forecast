@@ -42,9 +42,9 @@ def test_supplied_totals_intact(conn):
                                WHERE NOT is_excluded""")
                - Decimal("4961376.69")) <= CENT
     assert abs(scalar(conn, """SELECT SUM(forecast_contribution) FROM original_forecast
-                               WHERE financial_year=2026""") - Decimal("3701892.60")) <= CENT
+                               WHERE financial_year=2026""") - Decimal("3677092.30")) <= CENT
     assert abs(scalar(conn, """SELECT SUM(total_budget) FROM v_budget_quarter
-                               WHERE financial_year=2026""") - Decimal("3979534.55")) <= CENT
+                               WHERE financial_year=2026""") - Decimal("3952874.22")) <= CENT
 
 
 def test_allocation_integrity_clean(conn):

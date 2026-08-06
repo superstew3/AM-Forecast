@@ -52,9 +52,11 @@ aside {
   overflow-y: auto;
 }
 .brand { display: flex; gap: 11px; align-items: center; padding: 0 18px 14px; border-bottom: 1px solid #1e2d3a; }
-.brand-mark {
-  width: 34px; height: 34px; border-radius: 7px; background: var(--accent);
-  color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px;
+/* The logo carries a dark navy shield, so it needs a light plate to read
+   against the dark sidebar. */
+.brand-logo {
+  width: 38px; height: 38px; object-fit: contain; border-radius: 7px;
+  background: #fff; padding: 3px; flex-shrink: 0;
 }
 .brand strong { display: block; color: #fff; font-size: 14px; }
 .brand small { color: #7f8f9e; font-size: 11px; }
@@ -223,3 +225,225 @@ code { font-family: var(--mono); font-size: 11px; }
   aside nav { flex-direction: row; overflow-x: auto; }
   main { padding: 18px; }
 }
+
+
+/* --- manager detail grid --------------------------------------------------
+ * Three visual states, deliberately different from each other:
+ *   a number        -> normal
+ *   em dash         -> the month has not started
+ *   N/A             -> the measure is unavailable, tooltip says why
+ * The first version showed future months as N/A, which made an early financial
+ * year look like a broken report.
+ */
+.not-yet { color: var(--ink-faint); cursor: help; }
+.future-col { background: #fafbfc; }
+.na-cell { background: var(--na-bg); }
+
+table.grid td, table.grid th { padding: 6px 10px; font-size: 12px; }
+table.grid .sticky-col {
+  position: sticky; left: 0; background: #fff; z-index: 2; text-align: left;
+  min-width: 250px; border-right: 1px solid var(--line);
+}
+table.grid thead .sticky-col { background: #f3f5f7; z-index: 3; }
+table.grid .total-col { border-left: 1px solid var(--line); font-weight: 600; background: #fbfcfd; }
+
+.grid-total td { font-weight: 650; background: #eef3f7; border-top: 1px solid #c6d6e3; }
+.grid-total .sticky-col { background: #eef3f7; }
+.grid-forecast td { background: #fcfaf4; }
+.grid-forecast .sticky-col { background: #fcfaf4; }
+.grid-budget td { background: #f4f8f4; }
+.grid-budget .sticky-col { background: #f4f8f4; }
+.grid-prior td { color: var(--ink-soft); }
+.grid-derived td { font-style: normal; }
+.grid-transaction .sticky-col { padding-left: 18px; color: var(--ink-soft); }
+
+h1 .chip { vertical-align: middle; }
+
+/* --- charts ---------------------------------------------------------------
+ * Hand-rolled SVG. Colour carries meaning only: actual, budget, prior year,
+ * favourable, adverse. Nothing is coloured for decoration.
+ */
+.chart { margin: 4px 0 2px; }
+.chart svg { width: 100%; display: block; height: 240px; }
+.grid-line { stroke: var(--line-soft); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+.bar-hit { fill: transparent; }
+.bar-group.clickable { cursor: pointer; }
+.bar-group:hover .bar-hit { fill: rgba(31, 75, 110, 0.05); }
+.bar-group.selected .bar-hit { fill: rgba(31, 75, 110, 0.10); }
+.bar-budget { fill: #cfdde8; }
+.bar-actual { fill: var(--accent); }
+.bar-actual.negative { fill: var(--bad); }
+.line-prior { stroke: #c99a2e; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart-axis { display: flex; margin-top: 4px; }
+.chart-axis span { flex: 1; text-align: center; font-size: 10.5px; color: var(--ink-soft); }
+.chart-axis span.future { color: var(--ink-faint); font-style: italic; }
+.chart-legend { display: flex; gap: 16px; align-items: center; margin-top: 10px;
+  font-size: 11.5px; color: var(--ink-soft); }
+.chart-scale { margin-left: auto; color: var(--ink-faint); }
+.swatch { display: inline-block; width: 11px; height: 11px; border-radius: 2px;
+  margin-right: 5px; vertical-align: -1px; }
+i.bar-actual { background: var(--accent); }
+i.bar-budget { background: #cfdde8; }
+i.line-prior { background: #c99a2e; height: 3px; border-radius: 0; }
+.chart-tip { position: sticky; bottom: 0; display: flex; gap: 14px; flex-wrap: wrap;
+  background: #101b25; color: #e5ecf2; padding: 6px 11px; border-radius: 5px;
+  font-size: 11.5px; margin-top: 8px; }
+.chart-tip .muted { color: #8a99a7; }
+
+/* composition */
+.composition-bar { display: flex; height: 30px; border-radius: 5px; overflow: hidden;
+  border: 1px solid var(--line); }
+.seg { transition: opacity .12s; }
+.seg.clickable { cursor: pointer; }
+.composition-bar .seg:hover { opacity: 0.75; }
+.composition-bar .seg.selected { outline: 2px solid var(--ink); outline-offset: -2px; }
+.seg-0 { background: #1f4b6e; } .seg-1 { background: #9a2d2d; }
+.seg-2 { background: #1d6b45; } .seg-3 { background: #8a6412; }
+.seg-4 { background: #4a6d8c; } .seg-5 { background: #6b4a7a; }
+.seg-6 { background: #2f7d7d; } .seg-7 { background: #99632f; }
+.composition-key { list-style: none; padding: 0; margin: 14px 0 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px; }
+.composition-key li { display: flex; align-items: center; gap: 8px; font-size: 12.5px;
+  padding: 4px 6px; border-radius: 4px; }
+.composition-key li.clickable { cursor: pointer; }
+.composition-key li:hover { background: #f3f5f7; }
+.composition-key li.selected { background: var(--accent-soft); }
+.key-label { flex: 1; }
+.key-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+.key-share { color: var(--ink-soft); width: 52px; text-align: right; }
+
+/* change bars */
+.change-bars { list-style: none; padding: 0; margin: 0; }
+.change-bars li { display: flex; align-items: center; gap: 10px; padding: 3px 0;
+  font-size: 12.5px; }
+.change-label { width: 160px; color: var(--ink-soft); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.change-track { flex: 1; position: relative; height: 16px; background: #f5f7f9;
+  border-radius: 3px; }
+.change-axis { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px;
+  background: var(--line); }
+.change-fill { position: absolute; top: 3px; bottom: 3px; border-radius: 2px; }
+.change-fill.up { background: var(--good); }
+.change-fill.down { background: var(--bad); }
+.change-value { width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+.change-value.up { color: var(--good); }
+.change-value.down { color: var(--bad); }
+
+/* gauge */
+.gauge-track { position: relative; height: 26px; background: #eef1f4; border-radius: 5px;
+  overflow: hidden; }
+.gauge-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; }
+.gauge.over .gauge-fill { background: var(--good); }
+.gauge.under .gauge-fill { background: var(--watch); }
+.gauge-target { position: absolute; top: -3px; bottom: -3px; width: 2px;
+  background: var(--ink); }
+.gauge-verdict { margin-top: 9px; font-size: 13px; }
+.gauge-verdict .good { color: var(--good); font-weight: 600; }
+.gauge-verdict .bad { color: var(--bad); font-weight: 600; }
+.na-gauge { padding: 14px; background: var(--na-bg); border-radius: 5px;
+  color: var(--na); font-size: 12.5px; }
+
+/* verdict banner and page furniture */
+.verdict-bar { padding: 11px 15px; border-radius: 6px; margin-bottom: 16px;
+  font-size: 13.5px; border-left: 4px solid; }
+.verdict-bar.good { background: var(--good-bg); border-color: var(--good); color: #14532d; }
+.verdict-bar.bad { background: var(--bad-bg); border-color: var(--bad); color: #7f1d1d; }
+.verdict-bar.neutral { background: var(--na-bg); border-color: var(--na); color: var(--ink-soft); }
+.purpose { background: var(--accent-soft); border: 1px solid #cfe0ec; border-radius: 6px;
+  padding: 11px 14px; font-size: 12.5px; margin-bottom: 16px; max-width: 100ch; }
+.purpose em { color: var(--accent); font-style: normal; font-weight: 600; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 1200px) { .two-col { grid-template-columns: 1fr; } }
+.inline-select { margin-left: 12px; padding: 3px 7px; font-size: 13px;
+  border: 1px solid var(--line); border-radius: 4px; vertical-align: 3px; }
+.cell-good { color: var(--good); }
+.cell-bad { color: var(--bad); }
+
+/* verdict chips: made or missed budget, with the margin */
+.verdict-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px;
+  border-radius: 11px; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.verdict-chip.made { background: var(--good-bg); color: var(--good);
+  border: 1px solid #b6ddc7; }
+.verdict-chip.below { background: var(--bad-bg); color: var(--bad);
+  border: 1px solid #e6bcbc; }
+.verdict-chip b { font-variant-numeric: tabular-nums; font-weight: 700; }
+.qtr-fy { color: var(--ink-faint); font-size: 10.5px; }
+
+/* selected month detail under the chart */
+.month-detail { display: flex; gap: 20px; align-items: center; flex-wrap: wrap;
+  margin-top: 12px; padding: 10px 14px; background: var(--accent-soft);
+  border: 1px solid #cfe0ec; border-radius: 6px; font-size: 12.5px; }
+.month-detail strong { color: var(--accent); }
+.month-detail span { color: var(--ink-soft); }
+.month-detail .val, .month-detail .na { margin-left: 5px; }
+
+/* budget verdict cells */
+.cell-yes { background: var(--good-bg); color: var(--good); font-weight: 700; }
+.cell-no  { background: var(--bad-bg);  color: var(--bad);  font-weight: 700; }
+.growth-current { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; background: var(--accent-soft); border: 1px solid #cfe0ec;
+  border-radius: 6px; font-size: 13px; }
+.growth-current strong { font-size: 17px; color: var(--accent); }
+.growth-formula { color: var(--ink-soft); font-size: 12px; margin-left: auto; }
+
+/* Negative amounts: red as well as bracketed. Brackets alone are easy to miss
+   in a dense grid, and a return is the thing you most want to notice. */
+.negative, td.negative, .val.negative { color: var(--bad); }
+td.negative .val { color: var(--bad); }
+.metric-value .val.negative { color: var(--bad); }
+
+/* forecast history timeline */
+.history-label { display: flex; align-items: center; gap: 7px; }
+.history-meta { font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+.history-meta code { font-size: 10.5px; }
+.history-current td { background: var(--accent-soft); }
+.history-current .sticky-col { background: var(--accent-soft); }
+.chip.current { background: var(--accent); color: #fff; }
+.chip.new { background: var(--good-bg); color: var(--good); }
+.delta { display: block; font-size: 10.5px; margin-top: 1px; }
+.delta.up { color: var(--good); }
+.delta.down { color: var(--bad); }
+
+/* month budget locks */
+.lock-grid { margin-top: 16px; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.lock-head { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-soft);
+  max-width: 90ch; }
+.lock-cell { display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+  border: 1px solid var(--line); border-radius: 5px; background: #fcfdfe;
+  font-size: 12px; }
+.lock-cell.locked { background: var(--watch-bg); border-color: #e2c98f; }
+.lock-month { font-weight: 600; min-width: 62px; }
+.lock-budget { font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.lock-cell button { margin-left: auto; padding: 3px 9px; font-size: 11px; }
+.lock-meta { grid-column: 1 / -1; font-size: 10.5px; color: var(--ink-faint); }
+
+/* bonus tracker */
+.formula { margin: 8px 0 6px; padding-left: 18px; }
+.formula li { margin-bottom: 2px; }
+.formula code { background: #fff; padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--line); font-size: 11.5px; }
+.bonus-quarter { border: 1px solid var(--line); border-radius: 6px; padding: 13px 15px;
+  margin-bottom: 10px; background: #fcfdfe; }
+.bonus-quarter-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.bonus-months { color: var(--ink-soft); font-size: 12px; margin-left: auto; }
+.bonus-breakdown { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px;
+  font-size: 12.5px; color: var(--ink-soft); align-items: center; }
+.bonus-breakdown strong { color: var(--ink); }
+.bonus-breakdown .sep { color: var(--line); }
+.verdict-chip.status-earned { background: var(--good-bg); color: var(--good);
+  border: 1px solid #b6ddc7; }
+.verdict-chip.status-missed { background: var(--bad-bg); color: var(--bad);
+  border: 1px solid #e6bcbc; }
+.verdict-chip.status-on-track { background: var(--accent-soft); color: var(--accent);
+  border: 1px solid #cfe0ec; }
+.verdict-chip.status-behind { background: var(--watch-bg); color: var(--watch);
+  border: 1px solid #ecd9a8; }
+.verdict-chip.status-not-started { background: var(--na-bg); color: var(--na);
+  border: 1px solid var(--line); }
+
+/* column scope key: three bonus figures covering different periods */
+.scope-key { display: grid; gap: 5px; margin-bottom: 12px; padding: 10px 13px;
+  background: #f7f9fa; border: 1px solid var(--line); border-radius: 6px;
+  font-size: 11.5px; color: var(--ink-soft); }
+.scope-key strong { color: var(--ink); }

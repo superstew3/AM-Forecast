@@ -6,7 +6,10 @@ export function Value({ m, kind = "money", digits }) {
     const text = kind === "percent" ? percent(m, digits) :
         kind === "count" ? (unavailable ? NA : String(m.value)) :
             money(m);
-    return (_jsxs("span", { className: unavailable ? "na" : "val", title: unavailable ? (reasonFor(m) ?? "Not available") : undefined, "data-available": !unavailable, children: [text, unavailable && _jsx("span", { className: "na-mark", "aria-hidden": "true", children: "?" })] }));
+    // Negatives read red as well as bracketed. Brackets alone are easy to miss in
+    // a dense grid, and a return is the thing you most want to notice.
+    const negative = !unavailable && Number(m.value) < 0;
+    return (_jsxs("span", { className: unavailable ? "na" : `val${negative ? " negative" : ""}`, title: unavailable ? (reasonFor(m) ?? "Not available") : undefined, "data-available": !unavailable, children: [text, unavailable && _jsx("span", { className: "na-mark", "aria-hidden": "true", children: "?" })] }));
 }
 export function Metric({ label, m, kind = "money", hint, emphasis, ratio }) {
     const t = ratio ? tone(ratio) : "none";
@@ -42,8 +45,16 @@ export function Failed({ error, retry }) {
 export function DataTable({ columns, rows, serverTotals, caption, onRowClick }) {
     if (!rows.length)
         return _jsx(Empty, { what: caption ?? "records" });
-    return (_jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [caption && _jsx("caption", { children: caption }), _jsx("thead", { children: _jsx("tr", { children: columns.map((c) => (_jsxs("th", { className: c.align === "right" ? "right" : "", children: [c.label, c.hint && _jsx("span", { className: "hint", title: c.hint, children: "i" })] }, c.key))) }) }), _jsx("tbody", { children: rows.map((row, i) => (_jsx("tr", { onClick: onRowClick ? () => onRowClick(row) : undefined, className: onRowClick ? "clickable" : "", children: columns.map((c) => (_jsx("td", { className: c.align === "right" ? "right" : "", children: c.render ? c.render(row) : String(row[c.key] ?? NA) }, c.key))) }, row.id ?? row.policy_id ?? row.canonical_manager ?? i))) }), serverTotals && (_jsx("tfoot", { children: _jsx("tr", { children: columns.map((c, i) => (_jsx("td", { className: c.align === "right" ? "right" : "", children: i === 0 ? "Total (all rows, from server)" : serverTotals[c.key] ?? "" }, c.key))) }) }))] }) }));
+    return (_jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [caption && _jsx("caption", { children: caption }), _jsx("thead", { children: _jsx("tr", { children: columns.map((c) => (_jsxs("th", { className: c.align === "right" ? "right" : "", children: [c.label, c.hint && _jsx("span", { className: "hint", title: c.hint, children: "i" })] }, c.key))) }) }), _jsx("tbody", { children: rows.map((row, i) => (_jsx("tr", { onClick: onRowClick ? () => onRowClick(row) : undefined, className: onRowClick ? "clickable" : "", children: columns.map((c) => {
+                            const rendered = c.render ? c.render(row) : String(row[c.key] ?? NA);
+                            // Negatives read red as well as bracketed. Brackets alone are
+                            // easy to miss in a dense grid, and a return is the thing you
+                            // most want to notice.
+                            const negative = typeof rendered === "string"
+                                && /^\(\s*[$-]/.test(rendered.trim());
+                            return (_jsx("td", { className: `${c.align === "right" ? "right" : ""}${negative ? " negative" : ""}`, children: rendered }, c.key));
+                        }) }, row.id ?? row.policy_id ?? row.canonical_manager ?? i))) }), serverTotals && (_jsx("tfoot", { children: _jsx("tr", { children: columns.map((c, i) => (_jsx("td", { className: c.align === "right" ? "right" : "", children: i === 0 ? "Total (all rows, from server)" : serverTotals[c.key] ?? "" }, c.key))) }) }))] }) }));
 }
 export function BaselineWarning({ month, source, exceptions }) {
-    return (_jsxs("div", { className: "warning", role: "note", children: [_jsxs("strong", { children: [month, " uses a mixed baseline."] }), " ", "Original Forecast comes from the ", source ?? "Legacy Dashboard Forecast", " at manager-month level, not policy level. Actuals come from Sales Transactions. The two residual pending policies belong to Latest Forecast only. Policy-level renewal achievement is reliable from August 2026 onward.", exceptions?.length ? (_jsxs(_Fragment, { children: [" No baseline is available for ", exceptions.join(", "), ", which show N/A."] })) : null] }));
+    return (_jsxs("div", { className: "warning", role: "note", children: [_jsxs("strong", { children: [month, " uses supplied forecast figures."] }), " ", source ?? "A forecast per manager was entered directly", ", held at manager-month level, because the Renewals Pending file was extracted after most of that month's renewals had already transacted. Actuals come from Sales Transactions. Policy-level renewal detail begins August 2026.", exceptions?.length ? (_jsxs(_Fragment, { children: [" No forecast is recorded for ", exceptions.join(", "), ", which show N/A."] })) : null] }));
 }

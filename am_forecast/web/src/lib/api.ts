@@ -66,12 +66,61 @@ export interface ManagerRow {
   actual_new_business: Money;
   latest_outlook: Money;
   remaining_budget_gap: Money;
-  retention_by_income: Ratio;
-  retention_by_policy_count: Ratio;
+  renewal_income: Money;
+  renewal_forecast: Money;
+  budget_to_date: Money;
+  months_elapsed: number;
+  budget_verdict: string;
+  over_or_under_pct: Ratio;
   baseline_note: string | null;
+  has_started: boolean;
+}
+
+export interface Cell {
+  month: string;
+  value: string | number | null;
+  status: "actual" | "future" | "unavailable";
+  reason?: string | null;
+}
+
+export interface GridRow {
+  label: string;
+  kind: "transaction" | "total" | "forecast" | "budget" | "prior" | "derived";
+  value_kind: "money" | "percent" | "count" | "verdict";
+  cells: Cell[];
+  total: string | number | null;
+  hint?: string | null;
+}
+
+export interface ManagerDetail {
+  canonical_manager: string;
+  status: string;
+  include_in_rankings: boolean;
+  financial_year: number;
+  financial_year_label: string;
+  months: string[];
+  month_status: string[];
+  cut_off_month: string;
+  prior_year_actual: Money;
+  ytd_actual: Money;
+  ytd_budget: Money;
+  ytd_achievement: Ratio;
+  full_year_budget: Money;
+  full_year_original_forecast: Money;
+  full_year_latest_forecast: Money;
+  latest_outlook: Money;
+  remaining_budget_gap: Money;
+  forecast_achievement: Ratio;
+  active_growth_pct: Ratio;
+  active_growth_basis: string | null;
+  rows: GridRow[];
+  quarters: any[];
+  meta: Meta;
 }
 
 export const NA = "N/A";
+/** A month that has not happened yet. Distinct from N/A, which means unknown. */
+export const NOT_YET = "\u2014";
 export const GST_NOTE = "All income figures are GST inclusive.";
 
 const AUD = new Intl.NumberFormat("en-AU", {
@@ -87,6 +136,12 @@ export function money(m: Money | null | undefined): string {
   const n = typeof m.value === "string" ? Number(m.value) : m.value;
   if (Number.isNaN(n)) return NA;
   return n < 0 ? `(${AUD.format(Math.abs(n))})` : AUD.format(n);
+}
+
+/** True when a measure is a real, negative number. Drives the red styling. */
+export function isNegative(m: Money | Ratio | null | undefined): boolean {
+  if (!m || !m.available || m.value === null || m.value === undefined) return false;
+  return Number(m.value) < 0;
 }
 
 /** Format a percentage. Never substitutes 0% for unavailable. */
@@ -135,6 +190,26 @@ export function monthAU(value: string | null | undefined): string {
 
 // --- client ------------------------------------------------------------------
 
+export interface FinancialYear {
+  financial_year: number;
+  label: string;
+  has_actuals: boolean;
+  has_forecast: boolean;
+  is_current: boolean;
+  coverage_status: string | null;
+  coverage_note: string | null;
+}
+
+export interface Periods {
+  current_financial_year: number;
+  current_financial_year_label: string;
+  current_quarter: number;
+  cut_off_date: string;
+  cut_off_month: string;
+  financial_years: FinancialYear[];
+  quarters: { quarter: number; label: string; months: string }[];
+}
+
 export interface Session {
   username: string;
   role: "viewer" | "manager" | "administrator";
@@ -153,6 +228,13 @@ function loadIdentity(): { user: string; role: string } {
   return { user: "sam", role: "viewer" };
 }
 
+/**
+ * Identity is held in localStorage, not just in memory.
+ *
+ * The role selector reloads the page so every query refetches, which wiped an
+ * in-memory value before it was ever used and silently reset the role to
+ * viewer on every change.
+ */
 let session = loadIdentity();
 
 export function currentIdentity() {
@@ -187,11 +269,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   session: () => request<Session>("/api/session"),
+  periods: () => request<Periods>("/api/periods"),
+  mappings: () => request<any>("/api/reference/mappings"),
   basePosition: () => request<any>("/api/base-position"),
   reference: () => request<any>("/api/reference"),
   business: (fy: number) => request<BusinessSummary>(`/api/business?financial_year=${fy}`),
+  yearOverYear: (fy: number, manager?: string) =>
+    request<any>(`/api/analytics/year-over-year?financial_year=${fy}` +
+                 (manager ? `&manager=${encodeURIComponent(manager)}` : "")),
+  managerMatrix: (fy: number, measure: string, includeNonRanked: boolean) =>
+    request<any>(`/api/analytics/manager-matrix?financial_year=${fy}` +
+                 `&measure=${measure}&include_non_ranked=${includeNonRanked}`),
+  returnAnalysis: (fy?: number, manager?: string) =>
+    request<any>("/api/analytics/return-income" +
+                 (fy ? `?financial_year=${fy}` : "?") +
+                 (manager ? `&manager=${encodeURIComponent(manager)}` : "")),
+  managerDetail: (manager: string, fy: number) =>
+    request<ManagerDetail>(
+      `/api/managers/${encodeURIComponent(manager)}/detail?financial_year=${fy}`),
   managers: (params: URLSearchParams) =>
     request<{ items: ManagerRow[]; total: number; meta: Meta }>(`/api/managers?${params}`),
+  bonus: (fy: number) => request<any>(`/api/bonus?financial_year=${fy}`),
+  bonusForManager: (manager: string, fy: number) =>
+    request<any>(`/api/bonus/${encodeURIComponent(manager)}?financial_year=${fy}`),
+  forecastHistory: (manager: string, fy: number) =>
+    request<any>(`/api/forecast-history?manager=${encodeURIComponent(manager)}` +
+                 `&financial_year=${fy}`),
   forecastMovement: (params: URLSearchParams) =>
     request<any>(`/api/forecast-movement?${params}`),
   returnIncome: (params: URLSearchParams) => request<any>(`/api/return-income?${params}`),
@@ -211,3 +314,38 @@ export const api = {
   exportUrl: (dataset: string, fmt: string, params: URLSearchParams) =>
     `/api/export/${dataset}?fmt=${fmt}&${params}`,
 };
+
+
+/**
+ * Format a grid cell.
+ *
+ * Three outcomes, deliberately distinct:
+ *   actual      -> the number
+ *   future      -> an em dash; the month has not happened
+ *   unavailable -> N/A; we cannot say
+ *
+ * Showing a future month as N/A made the manager screen look broken when it was
+ * merely early in the financial year.
+ */
+export function cell(
+  c: Cell,
+  kind: "money" | "percent" | "count" | "verdict" = "money",
+): string {
+  if (c.status === "future") return NOT_YET;
+  if (c.status === "unavailable" || c.value === null) return NA;
+  if (kind === "verdict") return Number(c.value) >= 1 ? "YES" : "NO";
+  if (kind === "percent") {
+    const n = Number(c.value);
+    // Above/below rows read better with an explicit sign.
+    return n > 0 ? `+${percent({ value: n, available: true })}`
+                 : percent({ value: n, available: true });
+  }
+  if (kind === "count") return String(Math.round(Number(c.value)));
+  return money({ value: c.value, available: true });
+}
+
+export function cellTitle(c: Cell): string | undefined {
+  if (c.status === "future") return "This month has not started yet.";
+  if (c.status === "unavailable") return c.reason ?? "Not available";
+  return undefined;
+}

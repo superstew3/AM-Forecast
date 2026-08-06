@@ -26,8 +26,15 @@ export default function Policies() {
 
   return (
     <>
-      <h1>Policy-level renewals</h1>
+      <h1>Policy renewals <span className="fy">retention tracking</span></h1>
       <GstBanner meta={d.meta} />
+      <div className="purpose">
+        <strong>What this page is for.</strong> Every policy you were forecast to
+        renew, and what actually happened to it: renewed, transferred, lapsed, or
+        still pending. Use it to chase renewals before they lapse, and to see
+        which clients and classes you are losing. Filter by outcome to get a
+        working list.
+      </div>
       <Notes notes={d.meta.notes} />
       <Panel
         title={`${d.total.toLocaleString()} forecast policies`}

@@ -112,6 +112,10 @@ FORECAST_EXCEPTIONS = (
 ORIGINAL_FORECAST_ORIGINS = (
     "snapshot",
     "legacy_dashboard",
+    # Prior-year actual: a genuine observation fixed before the period began.
+    # Distinct from 'derived_from_actuals', which would take the period's own
+    # result as its target and is deliberately never used.
+    "prior_year_actual",
     "rebaseline",
     "derived_from_actuals",
 )
