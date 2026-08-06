@@ -1,5 +1,5 @@
 kind = "api"
-previewPath = "/"
+previewPath = "/legacy-api-internal"
 title = "AM Forecast"
 version = "1.0.0"
 id = "3B4_FFSkEVBkAeYMFRJ2e"
@@ -7,7 +7,7 @@ id = "3B4_FFSkEVBkAeYMFRJ2e"
 [[services]]
 localPort = 8080
 name = "API Server"
-paths = ["/", "/api"]
+paths = ["/legacy-api-internal"]
 
 [services.development]
 run = "sh -c 'cd /home/runner/workspace/am_forecast && exec python -m uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8080}'"

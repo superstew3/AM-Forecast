@@ -1,0 +1,23 @@
+kind = "web"
+previewPath = "/"
+title = "AM Forecast"
+description = "Account manager income forecasting web app: FastAPI backend with a built React/TypeScript frontend, served as a single process, backed by PostgreSQL."
+version = "1.0.0"
+id = "artifacts/am-forecast-web"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/", "/api" ]
+localPort = 20833
+
+[services.development]
+run = "sh -c 'cd /home/runner/workspace/am_forecast && exec python -m uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-20833}'"
+
+[services.production]
+
+[services.production.run]
+args = ["sh", "-c", "cd /home/runner/workspace/am_forecast && exec python -m uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-20833}"]
+
+[services.production.health.startup]
+path = "/api/health"
