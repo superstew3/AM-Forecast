@@ -1,0 +1,51 @@
+Updated version attached. This adds authentication — the app previously
+trusted an X-Role header, so anyone could claim administrator. That is
+now closed. Full code replacement plus one new migration.
+
+STEP 1 — Replace code
+Delete then replace these directories:
+  app/  web/src/  migrations/  scripts/  tests/  data/
+Also copy in web/public/ (contains the logo).
+Keep ./fixtures/ and AM_FORECAST_FIXTURES exactly as they are.
+
+STEP 2 — Apply the new migration
+  migrations/versions/0014_authentication.sql
+It converts app_user.password_hash from varchar to bytea. That is
+intentional — a scrypt digest is binary and storing it as text causes a
+login that never succeeds.
+
+STEP 3 — Create the accounts
+  python scripts/create_users.py "$AM_FORECAST_DSN"
+Then set the three passwords I have already been given:
+  python scripts/create_users.py "$AM_FORECAST_DSN" --set michael@stewartinsurance.com.au 'Granite-Osprey-Fathom-Rosella73?'
+  python scripts/create_users.py "$AM_FORECAST_DSN" --set sam@stewartinsurance.com.au 'Harbour-Cypress-Lantern-Trawler48!'
+  python scripts/create_users.py "$AM_FORECAST_DSN" --set anastasia@stewartinsurance.com.au 'Willow-Marlin-Compass-Saffron26$'
+Use single quotes exactly as written — the passwords contain shell
+metacharacters. Verify with: python scripts/create_users.py "$AM_FORECAST_DSN" --list
+
+STEP 4 — Environment
+  Set AM_FORECAST_ORIGINS to the deployed origin, e.g.
+    AM_FORECAST_ORIGINS=https://<my-repl-name>.replit.app
+  Do NOT set AM_FORECAST_DEV_AUTH. It must be absent in production.
+  Confirm the app is served over HTTPS — the session cookie's Secure
+  flag follows the request scheme.
+
+STEP 5 — Rebuild the frontend
+  cd web && npm install && npm run build
+
+STEP 6 — Verify and report before anything else
+  pytest tests/ --dsn "$AM_FORECAST_DSN"     → expect 242 passed
+  cd web && npm test                          → expect 11 passed
+Then confirm all three of these:
+  - Opening the app shows a sign-in screen, not the dashboard
+  - curl -s -o /dev/null -w "%{http_code}" <url>/api/business?financial_year=2026
+    returns 401
+  - The same curl with -H "X-Role: administrator" also returns 401
+
+Same hard constraints as before:
+- Do not modify anything under app/, migrations/ or web/src.
+- Do not move financial logic out of the database views.
+- Do not convert null values to zero.
+- Do not weaken any authentication setting to make something work. If
+  sign-in fails, tell me the error rather than changing the cookie
+  flags, the session lifetime or the lockout policy.
