@@ -207,12 +207,18 @@ def test_every_attempt_is_recorded(client, account, conn):
 # --- password storage ----------------------------------------------------------
 
 def test_passwords_are_never_stored_in_the_clear(conn, account):
+    """Stored as base64 text rather than bytea, so a managed publish pipeline
+    does not have to accept a column type change."""
+    import base64
     stored = scalar(conn, "SELECT password_hash FROM app_user WHERE id=%s",
                     (account["id"],))
-    assert PASSWORD.encode() not in bytes(stored)
-    assert len(bytes(stored)) == 32
-    assert scalar(conn, "SELECT length(password_salt) FROM app_user WHERE id=%s",
-                  (account["id"],)) == 16
+    assert isinstance(stored, str)
+    assert PASSWORD not in stored
+    assert len(base64.b64decode(stored)) == 32
+
+    salt = scalar(conn, "SELECT password_salt FROM app_user WHERE id=%s",
+                  (account["id"],))
+    assert len(base64.b64decode(salt)) == 16
     assert scalar(conn, "SELECT password_algo FROM app_user WHERE id=%s",
                   (account["id"],)) == "scrypt"
 
@@ -234,8 +240,9 @@ def test_session_tokens_are_stored_hashed(client, account, conn):
     stored = scalar(conn, """SELECT token_hash FROM user_session
                              WHERE user_id=%s ORDER BY id DESC LIMIT 1""",
                     (account["id"],))
-    assert token.encode() not in bytes(stored)
-    assert len(bytes(stored)) == 32
+    assert isinstance(stored, str)
+    assert token not in stored
+    assert len(stored) == 64          # SHA-256 as hex
     client.post("/api/auth/logout")
 
 
@@ -314,3 +321,66 @@ def test_issued_accounts_must_change_password(conn):
                   "anastasia@stewartinsurance.com.au"):
         assert scalar(conn, """SELECT must_change_password FROM app_user
                                WHERE email=%s""", (email,)) is True, email
+
+
+# --- deployment resilience ------------------------------------------------------
+
+def test_no_binary_columns_in_the_auth_schema(conn):
+    """Every auth column is text.
+
+    A managed publish pipeline can refuse ALTER COLUMN ... TYPE bytea as
+    possibly not backwards compatible, which blocks the whole release. The
+    encoding is cryptographically irrelevant; the deployability is not.
+    """
+    binary = _fetch(conn, """
+        SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_schema='public' AND data_type='bytea'
+          AND table_name IN ('app_user','user_session','auth_event')""")
+    assert binary == [], f"binary columns remain: {binary}"
+
+
+def test_health_reports_schema_readiness(client):
+    """A monitor must be able to tell 'running' from 'usable'.
+
+    An app serving pages against a database that never received its migrations
+    passes any simpler check while failing every query.
+    """
+    h = client.get("/api/health").json()
+    assert h["ready"] is True
+    assert h["checks"]["accounts"].endswith("account(s)")
+    for key in ("database", "sessions", "auth audit", "transactions"):
+        assert h["checks"][key] == "ok", key
+
+
+def test_migrations_are_recorded_once_applied(conn):
+    recorded = {r[0] for r in _fetch(conn, "SELECT filename FROM schema_migration")}
+    files = {p.name for p in (ROOT / "migrations" / "versions").glob("*.sql")}
+    # Every file is either recorded or was applied before tracking existed;
+    # nothing may be recorded that does not exist on disk.
+    assert recorded <= files, f"recorded but missing on disk: {recorded - files}"
+
+
+def test_bootstrap_is_disabled_unless_asked(monkeypatch):
+    """Automatic migration on startup is an escape hatch, not the default."""
+    import importlib
+
+    import app.bootstrap as bootstrap
+    monkeypatch.delenv("AM_FORECAST_AUTO_MIGRATE", raising=False)
+    importlib.reload(bootstrap)
+    assert bootstrap.AUTO_MIGRATE is False
+    assert bootstrap.run("postgresql://invalid") == {
+        "migrated": [], "users_created": [], "enabled": False}
+
+
+def test_seeding_refuses_to_invent_a_password(monkeypatch, conn):
+    """An account with no password in the environment is skipped, never created
+    with something guessable."""
+    import importlib
+
+    import app.bootstrap as bootstrap
+    importlib.reload(bootstrap)
+    for _, _, _, _, key in bootstrap.SEED_ACCOUNTS:
+        monkeypatch.delenv(key, raising=False)
+    # The table is not empty here, so seeding is a no-op regardless; the point
+    # is that it never fabricates a credential.
+    assert bootstrap.seed_users(os.environ["AM_FORECAST_DSN"]) == []

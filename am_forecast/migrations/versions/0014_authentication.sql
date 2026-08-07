@@ -6,6 +6,12 @@
 --
 -- Design notes worth keeping with the schema:
 --
+--   * Every value here is text, not bytea. The hash and salt are base64 and
+--     the session token hash is hex. Binary columns are the more natural
+--     choice, but a managed deployment pipeline can baulk at an
+--     ALTER COLUMN ... TYPE bytea as "possibly not backwards compatible" and
+--     refuse to publish. Encoding into text costs nothing cryptographically
+--     and keeps the schema change purely additive.
 --   * Passwords are stored as scrypt hashes with a per-user random salt.
 --     scrypt is memory-hard, so a stolen database cannot be attacked with
 --     cheap parallel hardware the way a plain SHA hash can. The cost
@@ -18,17 +24,11 @@
 --     known colleague's password, not a botnet.
 --   * Every authentication event is recorded, successful or not.
 
--- The original column was varchar, left over from a placeholder. A scrypt
--- digest is binary; storing it as text invites an encoding bug that would only
--- surface as a login that never succeeds.
-ALTER TABLE app_user
-    ALTER COLUMN password_hash TYPE bytea
-    USING CASE WHEN password_hash IS NULL THEN NULL
-               ELSE convert_to(password_hash, 'UTF8') END;
-
+-- password_hash keeps its existing text type and holds base64. No column type
+-- changes here at all: every statement below adds something.
 ALTER TABLE app_user
     ADD COLUMN IF NOT EXISTS email             varchar(255),
-    ADD COLUMN IF NOT EXISTS password_salt     bytea,
+    ADD COLUMN IF NOT EXISTS password_salt     varchar(32),
     ADD COLUMN IF NOT EXISTS password_algo     varchar(20)  NOT NULL DEFAULT 'scrypt',
     ADD COLUMN IF NOT EXISTS password_n        integer      NOT NULL DEFAULT 32768,
     ADD COLUMN IF NOT EXISTS password_r        integer      NOT NULL DEFAULT 8,
@@ -52,7 +52,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_app_user_email
 CREATE TABLE IF NOT EXISTS user_session (
     id            bigserial PRIMARY KEY,
     user_id       integer NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-    token_hash    bytea NOT NULL,
+    token_hash    varchar(64) NOT NULL,   -- SHA-256, hex
     issued_at     timestamptz NOT NULL DEFAULT now(),
     expires_at    timestamptz NOT NULL,
     last_seen_at  timestamptz NOT NULL DEFAULT now(),

@@ -74,20 +74,46 @@ def _conn():
 # --- password hashing --------------------------------------------------------
 
 def hash_password(password: str, *, n: int = SCRYPT_N, r: int = SCRYPT_R,
-                  p: int = SCRYPT_P) -> tuple[bytes, bytes, int, int, int]:
+                  p: int = SCRYPT_P) -> tuple[str, str, int, int, int]:
+    """Hash a password. Returns base64 text, not bytes.
+
+    Text rather than binary because a managed deployment pipeline can refuse an
+    ALTER COLUMN ... TYPE bytea as possibly not backwards compatible and block
+    the release. base64 of the same 32 bytes of scrypt output is
+    cryptographically identical and keeps the schema change additive.
+    """
     salt = os.urandom(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p,
                             dklen=DK_LEN, maxmem=n * r * 256)
-    return digest, salt, n, r, p
+    return _b64(digest), _b64(salt), n, r, p
 
 
-def verify_password(password: str, digest: bytes, salt: bytes,
-                    n: int, r: int, p: int) -> bool:
-    candidate = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p,
-                               dklen=len(digest), maxmem=n * r * 256)
+def _b64(raw: bytes) -> str:
+    return base64.b64encode(raw).decode()
+
+
+def _unb64(value) -> bytes:
+    """Decode stored material.
+
+    Tolerates memoryview and bytes as well as str, so a database still holding
+    the older binary columns keeps working until migration 0015 has run.
+    """
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        try:
+            return base64.b64decode(raw, validate=True)
+        except Exception:
+            return raw
+    return base64.b64decode(value)
+
+
+def verify_password(password: str, digest, salt, n: int, r: int, p: int) -> bool:
+    digest_raw, salt_raw = _unb64(digest), _unb64(salt)
+    candidate = hashlib.scrypt(password.encode(), salt=salt_raw, n=n, r=r, p=p,
+                               dklen=len(digest_raw), maxmem=n * r * 256)
     # Constant time: a short-circuit comparison leaks how much of the hash
     # matched, which is enough to attack it byte by byte.
-    return hmac.compare_digest(candidate, digest)
+    return hmac.compare_digest(candidate, digest_raw)
 
 
 PASSWORD_RULES = (
@@ -114,8 +140,9 @@ def check_password_strength(password: str) -> None:
 
 # --- sessions ----------------------------------------------------------------
 
-def _token_hash(token: str) -> bytes:
-    return hashlib.sha256(token.encode()).digest()
+def _token_hash(token: str) -> str:
+    """Hex SHA-256 of the token. The token itself is never stored."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _client(request: Request) -> tuple[str | None, str | None]:
@@ -297,9 +324,8 @@ def login(body: LoginBody, request: Request, response: Response):
                          f"{'s' if minutes != 1 else ''}.")
 
             elif not (user["password_hash"] and verify_password(
-                    body.password, bytes(user["password_hash"]),
-                    bytes(user["password_salt"]), user["password_n"],
-                    user["password_r"], user["password_p"])):
+                    body.password, user["password_hash"], user["password_salt"],
+                    user["password_n"], user["password_r"], user["password_p"])):
                 attempts = user["failed_attempts"] + 1
                 lock_until = (now + dt.timedelta(minutes=LOCKOUT_MINUTES)
                               if attempts >= MAX_FAILED_ATTEMPTS else None)
@@ -392,8 +418,8 @@ def change_password(body: ChangePasswordBody, request: Request):
                                   password_r, password_p
                            FROM app_user WHERE id = %s""", (session.user_id,))
             row = cur.fetchone()
-            if not verify_password(body.current_password, bytes(row["password_hash"]),
-                                   bytes(row["password_salt"]), row["password_n"],
+            if not verify_password(body.current_password, row["password_hash"],
+                                   row["password_salt"], row["password_n"],
                                    row["password_r"], row["password_p"]):
                 _record(cur, "login_failed_password", user_id=session.user_id,
                         email=session.email, request=request,

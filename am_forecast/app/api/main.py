@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..validation import BASE_POSITION, TOLERANCE as CENT
 from .core import (
+    DSN,
     GST_NOTE, TIMEZONE, User, current_user, fetch_all, fetch_one, meta, to_cents,
 )
 from .analytics import router as analytics_router
@@ -51,11 +52,74 @@ app.include_router(bonus_router, prefix="/api")
 app.include_router(operations_router, prefix="/api")
 
 
+@app.on_event("startup")
+def _bootstrap() -> None:
+    """Bring the database up to date, when explicitly asked to.
+
+    Disabled unless AM_FORECAST_AUTO_MIGRATE=1. It exists for deployments where
+    the platform ships new code but never applies the matching schema, which
+    presents as an app that loads and then fails on every query.
+    """
+    import logging
+
+    from ..bootstrap import run
+    try:
+        result = run(DSN)
+    except Exception:
+        logging.exception("bootstrap failed; the app will start but may not work")
+        return
+    if result["migrated"]:
+        logging.warning("applied migrations at startup: %s",
+                        ", ".join(result["migrated"]))
+    if result["users_created"]:
+        logging.warning("created initial accounts: %s",
+                        ", ".join(result["users_created"]))
+
+
 @app.get("/api/health", tags=["system"])
 def health():
-    """Unauthenticated on purpose, so a monitor can poll it."""
-    row = fetch_one("SELECT cut_off_date FROM reporting_settings WHERE id = 1")
-    return {"status": "ok", "cut_off_date": row["cut_off_date"], "timezone": TIMEZONE,
+    """Unauthenticated on purpose, so a monitor can poll it.
+
+    Reports schema readiness as well as liveness. An app serving pages against
+    a database that never received its migrations looks healthy by any simpler
+    check, and that is precisely the failure worth catching.
+    """
+    checks = {}
+    ready = True
+    cut_off = None
+    try:
+        row = fetch_one("SELECT cut_off_date FROM reporting_settings WHERE id = 1")
+        checks["database"] = "ok"
+        if row is None:
+            # Schema present, reference data absent. Naming that specifically
+            # saves someone hunting through application code for a fault that
+            # is really an unfinished setup.
+            checks["reference data"] = "MISSING — run app.seed.load_seed"
+            ready = False
+        else:
+            cut_off = row["cut_off_date"]
+    except Exception as exc:
+        checks["database"] = f"unavailable: {type(exc).__name__}"
+        return {"status": "unhealthy", "ready": False, "checks": checks,
+                "hint": "The schema is missing or unreachable. Check the "
+                        "connection string, and that migrations have been "
+                        "applied to THIS database."}
+
+    for table, label in (("app_user", "accounts"), ("user_session", "sessions"),
+                         ("auth_event", "auth audit"),
+                         ("sales_transaction", "transactions")):
+        present = fetch_one("SELECT to_regclass(%(t)s) IS NOT NULL AS ok",
+                            {"t": f"public.{table}"})["ok"]
+        checks[label] = "ok" if present else "MISSING — migrations not applied"
+        ready = ready and present
+
+    if checks.get("accounts") == "ok":
+        n = fetch_one("SELECT count(*) AS n FROM app_user WHERE email IS NOT NULL")["n"]
+        checks["accounts"] = f"{n} account(s)" if n else "NONE — nobody can sign in"
+        ready = ready and n > 0
+
+    return {"status": "ok" if ready else "not ready", "ready": ready,
+            "checks": checks, "cut_off_date": cut_off, "timezone": TIMEZONE,
             "gst_note": GST_NOTE}
 
 
