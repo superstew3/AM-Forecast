@@ -361,18 +361,44 @@ def test_migrations_are_recorded_once_applied(conn):
 
 
 def test_bootstrap_is_disabled_unless_asked(monkeypatch):
-    """Automatic migration on startup is an escape hatch, not the default."""
+    """Both steps are escape hatches, not defaults."""
     import importlib
 
     import app.bootstrap as bootstrap
     monkeypatch.delenv("AM_FORECAST_AUTO_MIGRATE", raising=False)
+    monkeypatch.delenv("AM_FORECAST_AUTO_SEED_USERS", raising=False)
     importlib.reload(bootstrap)
     assert bootstrap.AUTO_MIGRATE is False
-    assert bootstrap.run("postgresql://invalid") == {
-        "migrated": [], "users_created": [], "enabled": False}
+    assert bootstrap.AUTO_SEED is False
+    result = bootstrap.run("postgresql://invalid")
+    assert result["migrated"] == [] and result["users_created"] == []
 
 
-def test_seeding_refuses_to_invent_a_password(monkeypatch, conn):
+def test_seeding_does_not_require_the_migration_flag(monkeypatch):
+    """Seeding is an INSERT, not DDL, and must be reachable on a deployment
+    that permits inserts but forbids startup DDL.
+
+    An earlier version gated seeding behind AM_FORECAST_AUTO_MIGRATE. On a
+    managed platform that refuses startup DDL, that left no way to create the
+    first account short of hand-editing the production database.
+    """
+    import importlib
+
+    import app.bootstrap as bootstrap
+    monkeypatch.delenv("AM_FORECAST_AUTO_MIGRATE", raising=False)
+    monkeypatch.setenv("AM_FORECAST_AUTO_SEED_USERS", "1")
+    importlib.reload(bootstrap)
+    assert bootstrap.AUTO_MIGRATE is False
+    assert bootstrap.AUTO_SEED is True
+
+    # Accounts already exist here, so nothing is created — but seeding must
+    # have been reached, which the note proves.
+    result = bootstrap.run(os.environ["AM_FORECAST_DSN"])
+    assert result["migrated"] == []
+    assert result["notes"] == ["accounts already exist; seeding skipped"]
+
+
+def test_seeding_refuses_to_invent_a_password(monkeypatch):
     """An account with no password in the environment is skipped, never created
     with something guessable."""
     import importlib
@@ -381,6 +407,18 @@ def test_seeding_refuses_to_invent_a_password(monkeypatch, conn):
     importlib.reload(bootstrap)
     for _, _, _, _, key in bootstrap.SEED_ACCOUNTS:
         monkeypatch.delenv(key, raising=False)
-    # The table is not empty here, so seeding is a no-op regardless; the point
-    # is that it never fabricates a credential.
-    assert bootstrap.seed_users(os.environ["AM_FORECAST_DSN"]) == []
+    created, note = bootstrap.seed_users(os.environ["AM_FORECAST_DSN"])
+    assert created == []
+    assert note is not None
+
+
+def test_seeding_says_why_nothing_happened(monkeypatch):
+    """Silence is unhelpful: an empty result has several causes needing
+    different fixes."""
+    import importlib
+
+    import app.bootstrap as bootstrap
+    importlib.reload(bootstrap)
+    created, note = bootstrap.seed_users(os.environ["AM_FORECAST_DSN"])
+    assert created == []
+    assert "already exist" in note

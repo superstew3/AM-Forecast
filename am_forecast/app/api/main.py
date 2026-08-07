@@ -74,6 +74,10 @@ def _bootstrap() -> None:
     if result["users_created"]:
         logging.warning("created initial accounts: %s",
                         ", ".join(result["users_created"]))
+    # Say why nothing happened. An empty result can mean "already done", "no
+    # passwords supplied" or "wrong database", and those need different fixes.
+    for note in result.get("notes", []):
+        logging.warning("account seeding: %s", note)
 
 
 @app.get("/api/health", tags=["system"])

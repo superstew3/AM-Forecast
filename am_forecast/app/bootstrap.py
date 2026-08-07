@@ -19,9 +19,19 @@ Three properties make it safe enough to run on every start:
 * **Off unless asked.** `AM_FORECAST_AUTO_MIGRATE=1` enables it. Nothing changes
   for anyone applying migrations by hand.
 
-Account seeding is separate and narrower: it creates the initial users only when
-the table is empty, and only from passwords supplied in the environment. It will
-not touch an account that already exists, and it never invents a password.
+Account seeding is separate, narrower, and **independently switched**. It creates
+the initial users only when none exist, and only from passwords supplied in the
+environment. It will not touch an account that already exists, and it never
+invents a password.
+
+The two are independent on purpose. Seeding is an ordinary INSERT — no schema
+change, nothing a platform guardrail should object to — whereas automatic
+migration is DDL at startup, which many managed platforms forbid outright and
+reasonably so. An earlier version made seeding depend on the migration flag,
+which meant a deployment allowed to insert rows but not to run DDL could not
+create its first account at all: the only remaining route was hand-editing the
+production database. Coupling a harmless operation to a restricted one leaves no
+safe path.
 """
 from __future__ import annotations
 
@@ -123,22 +133,39 @@ def migrate(dsn: str, *, actor: str = "startup") -> list[str]:
     return applied
 
 
-def seed_users(dsn: str) -> list[str]:
+def seed_users(dsn: str) -> tuple[list[str], str | None]:
     """Create the initial accounts, once, from environment-supplied passwords.
 
+    Returns the addresses created and, where nothing was created, a note saying
+    why. Silence is unhelpful here: an empty result could mean "already done",
+    "no passwords supplied" or "the table does not exist", and those need
+    different responses.
+
     Deliberately narrow. It will not overwrite an existing account, and it
-    refuses to invent a password: an account with no password set in the
-    environment is skipped and reported, rather than created with something
-    guessable.
+    refuses to invent a password.
     """
     from .api.auth import hash_password
 
     created: list[str] = []
     with psycopg2.connect(dsn) as conn:
         with conn.cursor() as cur:
+            if not _table_exists(cur, "app_user"):
+                return [], ("app_user does not exist: migrations have not been "
+                            "applied to this database")
+            cur.execute("""SELECT count(*) FROM information_schema.columns
+                           WHERE table_name='app_user' AND column_name='email'""")
+            if not cur.fetchone()[0]:
+                return [], ("app_user has no email column: the authentication "
+                            "migration has not been applied to this database")
+
             cur.execute("SELECT count(*) FROM app_user WHERE email IS NOT NULL")
             if cur.fetchone()[0]:
-                return []
+                return [], "accounts already exist; seeding skipped"
+
+            supplied = [k for _, _, _, _, k in SEED_ACCOUNTS if os.environ.get(k)]
+            if not supplied:
+                return [], ("no passwords supplied; set "
+                            + ", ".join(k for _, _, _, _, k in SEED_ACCOUNTS))
             for email, name, role, manager, env_key in SEED_ACCOUNTS:
                 password = os.environ.get(env_key)
                 if not password:
@@ -160,15 +187,29 @@ def seed_users(dsn: str) -> list[str]:
                                            '{"by":"bootstrap"}'::jsonb)""",
                                 (email, row[0]))
                     created.append(email)
-    return created
+    skipped = [e for e, _, _, _, k in SEED_ACCOUNTS
+               if not os.environ.get(k)]
+    note = (f"skipped (no password supplied): {', '.join(skipped)}"
+            if skipped else None)
+    return created, note
 
 
 def run(dsn: str) -> dict:
-    """Called at application startup. Silent and harmless when disabled."""
-    result: dict = {"migrated": [], "users_created": [], "enabled": AUTO_MIGRATE}
-    if not AUTO_MIGRATE:
-        return result
-    result["migrated"] = migrate(dsn)
+    """Called at application startup. Silent and harmless when both are off.
+
+    The two steps are gated separately. Seeding must be reachable on a
+    deployment that permits inserts but forbids startup DDL, which is the normal
+    posture for a managed platform.
+    """
+    result: dict = {
+        "migrated": [], "users_created": [], "notes": [],
+        "auto_migrate": AUTO_MIGRATE, "auto_seed": AUTO_SEED,
+    }
+    if AUTO_MIGRATE:
+        result["migrated"] = migrate(dsn)
     if AUTO_SEED:
-        result["users_created"] = seed_users(dsn)
+        created, note = seed_users(dsn)
+        result["users_created"] = created
+        if note:
+            result["notes"].append(note)
     return result
