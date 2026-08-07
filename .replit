@@ -26,3 +26,4 @@ channel = "stable-25_05"
 
 [userenv.shared]
 AM_FORECAST_DSN = "postgresql://postgres:password@helium/heliumdb?sslmode=disable"
+AM_FORECAST_ORIGINS = "https://SAM-DA-MAN.replit.app"

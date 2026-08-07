@@ -111,16 +111,19 @@ export function setIdentity(user, role) {
         // non-fatal: the role simply will not survive a reload
     }
 }
+export class NotSignedIn extends Error {
+}
 async function request(path, init) {
     const res = await fetch(path, {
         ...init,
-        headers: {
-            "Content-Type": "application/json",
-            "X-User": session.user,
-            "X-Role": session.role,
-            ...(init?.headers ?? {}),
-        },
+        // The session cookie is HttpOnly, so it travels only because of this.
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
+    if (res.status === 401) {
+        const detail = await res.json().catch(() => ({ detail: "Not signed in." }));
+        throw new NotSignedIn(detail.detail ?? "Not signed in.");
+    }
     if (!res.ok) {
         const detail = await res.json().catch(() => ({ detail: res.statusText }));
         throw new Error(detail.detail ?? `Request failed (${res.status})`);
@@ -129,6 +132,9 @@ async function request(path, init) {
 }
 export const api = {
     session: () => request("/api/session"),
+    login: (email, password) => request("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+    logout: () => request("/api/auth/logout", { method: "POST" }),
+    me: () => request("/api/auth/me"),
     periods: () => request("/api/periods"),
     mappings: () => request("/api/reference/mappings"),
     basePosition: () => request("/api/base-position"),

@@ -10,11 +10,8 @@ import datetime as dt
 import io
 import os
 from decimal import ROUND_HALF_UP, Decimal
-from pathlib import Path
 
 import pytest
-
-from conftest import SALES_FILE
 
 CENT = Decimal("0.01")
 
@@ -361,9 +358,7 @@ def test_18_summary_reconciles_to_drilldown(client, conn):
 
 def test_19_accept_uses_the_exact_previewed_figures(admin, conn, tmp_path):
     import polars as pl
-    if not Path(SALES_FILE).exists():
-        pytest.skip("source fixture not available")
-    src = SALES_FILE
+    src = "/mnt/user-data/uploads/Sales_Transaction_List_25-26.csv"
     sample = pl.read_csv(src, infer_schema_length=0).head(200).with_columns(
         (pl.col("InvNumber").cast(pl.Int64) + 6_600_000).cast(pl.Utf8).alias("InvNumber"))
     path = tmp_path / "preview_check.csv"

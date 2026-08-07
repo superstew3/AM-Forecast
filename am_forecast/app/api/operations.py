@@ -410,6 +410,26 @@ class GrowthBody(BaseModel):
 def set_growth_rate(body: GrowthBody, user=Depends(require_admin)):
     if body.growth_pct is None and body.dollar_override is None:
         raise HTTPException(400, "growth_pct or dollar_override is required")
+
+    # Naming a manager while the scope is global is contradictory, and the
+    # dangerous reading is the silent one: the manager is ignored and every
+    # manager's budget moves. Refuse rather than guess.
+    if body.scope == "global" and body.canonical_manager:
+        raise HTTPException(
+            400,
+            f"scope is 'global' but '{body.canonical_manager}' was named. A global "
+            "rate applies to every manager. Use scope 'manager' to change one "
+            "manager, or clear the manager to change everyone.")
+    if body.scope != "global" and not body.canonical_manager:
+        raise HTTPException(
+            400, f"scope '{body.scope}' requires a manager.")
+    if body.scope == "manager_quarter" and not (body.financial_year
+                                                and body.financial_quarter):
+        raise HTTPException(
+            400, "scope 'manager_quarter' requires financial_year and "
+                 "financial_quarter.")
+    if body.scope == "manager_month" and not body.target_month:
+        raise HTTPException(400, "scope 'manager_month' requires target_month.")
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT id, growth_pct, dollar_override FROM growth_rate

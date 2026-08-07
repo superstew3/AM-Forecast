@@ -85,6 +85,7 @@ class ManagerDetail(BaseModel):
     forecast_achievement: Ratio
     active_growth_pct: Ratio
     active_growth_basis: str | None = None
+    quarter_growth: list[dict] = []
 
     rows: list[GridRow]
     quarters: list[dict]
@@ -195,6 +196,14 @@ def manager_detail(manager: str, financial_year: int = Query(2026),
     active_basis = next((r["growth_basis"] for r in growth_rows), None)
     active_growth = next((r["growth_pct"] for r in growth_rows
                           if r["growth_pct"] is not None), None)
+    # Per-quarter view of the rate in force, so the control can show what it is
+    # about to change rather than only the headline.
+    quarter_growth = [{"financial_quarter": r["financial_quarter"],
+                       "growth_pct": r["growth_pct"],
+                       "growth_basis": r["growth_basis"],
+                       "dollar_override": r["dollar_override"]}
+                      for r in sorted(growth_rows,
+                                      key=lambda x: x["financial_quarter"])]
 
     prior = {}
     for r in fetch_all("""
@@ -217,10 +226,15 @@ def manager_detail(manager: str, financial_year: int = Query(2026),
                         cells=_cells(months, positive, cut_month),
                         total=_sum(positive),
                         hint="Sum of positive transactions before returns."))
+    # Shown signed. It is money going back out, so it should read as a loss
+    # rather than as another positive figure sitting beside income.
+    signed_returns = {m: -v for m, v in returns.items() if v is not None}
     rows.append(GridRow(label="Return Income", kind="derived",
-                        cells=_cells(months, returns, cut_month),
-                        total=_sum(returns),
-                        hint="Absolute value of negative transactions."))
+                        cells=_cells(months, signed_returns, cut_month),
+                        total=_sum(signed_returns),
+                        hint="Money returned: lapses, cancellations, negative "
+                             "endorsements and corrections. Shown as a negative "
+                             "because it reduces Net Actual Income."))
     rows.append(GridRow(label="Net Actual Income", kind="total",
                         cells=_cells(months, actual, cut_month), total=_sum(actual),
                         hint="Positive income less return income. This is the primary "
@@ -409,4 +423,5 @@ def manager_detail(manager: str, financial_year: int = Query(2026),
             active_growth,
             "A direct dollar override is in force, so no percentage applies."),
         active_growth_basis=active_basis,
+        quarter_growth=quarter_growth,
         rows=rows, quarters=quarters, meta=meta(financial_year, notes))

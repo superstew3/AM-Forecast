@@ -215,6 +215,7 @@ def build(client) -> str:
     periods_data = client.get("/api/periods").json()
     maps = client.get("/api/reference/mappings").json()
     detail = client.get("/api/managers/Sam%20Stewart/detail?financial_year=2026").json()
+    manager_index = client.get("/api/managers?period=ytd&financial_year=2026").json()
     yoy = client.get("/api/analytics/year-over-year?financial_year=2026").json()
     matrix = client.get("/api/analytics/manager-matrix?financial_year=2026"
                         "&measure=net_actual").json()
@@ -615,11 +616,58 @@ def build(client) -> str:
                  f'<td class="sticky-col">{html.escape(row["label"])}{hint}</td>'
                  f'{cells}<td class="right total-col">{total}</td></tr>')
 
+    # --- manager index -------------------------------------------------------
+    cards = ""
+    for r in manager_index["items"]:
+        measurable = r["budget_achievement"]["available"]
+        made = r["budget_verdict"] == "Made budget"
+        tone = "neutral" if not measurable else ("good" if made else "bad")
+        pctv = ""
+        if r["over_or_under_pct"]["available"]:
+            v = float(r["over_or_under_pct"]["value"]) * 100
+            pctv = f'<b>{v:+.1f}%</b>'
+        verdict = (f'{html.escape(r["budget_verdict"])}{pctv}' if measurable
+                   else "Not measurable yet")
+        chip = ('<span class="chip">not ranked</span>'
+                if not r["include_in_rankings"] else "")
+        cards += (
+            f'<div class="manager-card"><div class="manager-card-head">'
+            f'<strong>{html.escape(r["canonical_manager"])}</strong>{chip}</div>'
+            f'<div class="manager-card-figure">{money(r["net_actual_income"])}'
+            f'<span class="manager-card-caption">net actual, year to date</span></div>'
+            f'<div class="manager-card-row"><span>Budget</span>'
+            f'{money(r["budget_to_date"])}</div>'
+            f'<div class="manager-card-row"><span>Renewal</span>'
+            f'{pct(r["renewal_achievement"])}</div>'
+            f'<div class="manager-card-verdict {tone}">{verdict}</div></div>')
+    index_html = panel(
+        "Choose a manager",
+        "Year-to-date position for each. Open one for the full month-by-month "
+        "view, budget growth and bonus. In the running application each card is "
+        "a link.",
+        f'<div class="manager-cards">{cards}</div>')
+
+    growth_txt = (f'{Decimal(str(detail["active_growth_pct"]["value"])) * 100:.2f}%'
+                  if detail["active_growth_pct"]["available"] else "N/A")
+    quarter_chips = "".join(
+        f'<span class="growth-q{" overridden" if q["growth_basis"] == "manager_quarter" else ""}">'
+        f'Q{q["financial_quarter"]}<strong>'
+        f'{"$ override" if q["growth_pct"] is None else f"{Decimal(str(q[chr(103)+chr(114)+chr(111)+chr(119)+chr(116)+chr(104)+chr(95)+chr(112)+chr(99)+chr(116)])) * 100:.2f}%"}'
+        "</strong></span>"
+        for q in detail.get("quarter_growth", []))
+
     detail_html = (
         '<div class="purpose"><strong>Static preview limitation.</strong> This page '
-        'renders one manager. In the running application there is a dropdown here '
-        'listing every account manager, plus a financial-year selector and a '
-        'monthly/quarterly toggle.</div>')
+        'renders one manager. In the running application you arrive here from the '
+        'Account managers page, and the growth control opens a form.</div>'
+        f'<div class="growth-control"><div class="growth-headline"><div>'
+        f'<span class="growth-caption">Budget growth for '
+        f'{html.escape(detail["canonical_manager"])}</span>'
+        f'<span class="growth-figure">{growth_txt}</span>'
+        f'<span class="growth-source">set at '
+        f'{detail["active_growth_basis"] or "default"} level</span></div>'
+        '<button class="growth-toggle">Change</button></div>'
+        f'<div class="growth-quarters">{quarter_chips}</div></div>')
     detail_html += panel(
         "Where this manager stands",
         f'Year to date is measured to the reporting cut-off, {detail["cut_off_month"]}. '
@@ -636,14 +684,6 @@ def build(client) -> str:
         + "</div>")
     growth_txt = (f'{Decimal(str(detail["active_growth_pct"]["value"])) * 100:.2f}%'
                   if detail["active_growth_pct"]["available"] else "N/A")
-    detail_html += panel(
-        "Budget growth percentage",
-        "Set per manager. The budget follows from it directly.",
-        f'<div class="growth-current"><span>Growth % currently applied to '
-        f'{html.escape(detail["canonical_manager"])}:</span><strong>{growth_txt}</strong>'
-        f'<span class="chip">from {detail["active_growth_basis"] or "default"}</span>'
-        '<span class="growth-formula">Budget = Renewal Forecast + '
-        '(Renewal Forecast &times; this %)</span></div>')
     detail_html += panel(
         "Month by month",
         "An em dash means the month has not started. N/A means the measure is "
@@ -844,6 +884,8 @@ def build(client) -> str:
     sections = [
         ("business", "Overall business performance", "FY2026-27",
          banner + notes + warning + business_html),
+        ("managerindex", "Account managers", "FY2026-27 year to date",
+         banner + index_html),
         ("manager", f'{detail["canonical_manager"]}', detail["financial_year_label"],
          banner + detail_html),
         ("allmanagers", "All managers by month", "FY2026-27", banner + matrix_html),

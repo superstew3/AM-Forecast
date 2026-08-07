@@ -113,6 +113,12 @@ export interface ManagerDetail {
   forecast_achievement: Ratio;
   active_growth_pct: Ratio;
   active_growth_basis: string | null;
+  quarter_growth: {
+    financial_quarter: number;
+    growth_pct: string | number | null;
+    growth_basis: string;
+    dollar_override: string | number | null;
+  }[];
   rows: GridRow[];
   quarters: any[];
   meta: Meta;
@@ -250,16 +256,19 @@ export function setIdentity(user: string, role: string) {
   }
 }
 
+export class NotSignedIn extends Error {}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "X-User": session.user,
-      "X-Role": session.role,
-      ...(init?.headers ?? {}),
-    },
+    // The session cookie is HttpOnly, so it travels only because of this.
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
+  if (res.status === 401) {
+    const detail = await res.json().catch(() => ({ detail: "Not signed in." }));
+    throw new NotSignedIn(detail.detail ?? "Not signed in.");
+  }
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail ?? `Request failed (${res.status})`);
@@ -269,6 +278,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   session: () => request<Session>("/api/session"),
+  login: (email: string, password: string) =>
+    request<any>("/api/auth/login",
+                 { method: "POST", body: JSON.stringify({ email, password }) }),
+  logout: () => request<any>("/api/auth/logout", { method: "POST" }),
+  me: () => request<any>("/api/auth/me"),
   periods: () => request<Periods>("/api/periods"),
   mappings: () => request<any>("/api/reference/mappings"),
   basePosition: () => request<any>("/api/base-position"),

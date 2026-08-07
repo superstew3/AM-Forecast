@@ -23,7 +23,7 @@ from typing import Any, Generic, Iterable, Sequence, TypeVar
 
 import psycopg2
 import psycopg2.extras
-from fastapi import Depends, Header, HTTPException, Query
+from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 DSN = os.environ.get("AM_FORECAST_DSN", "dbname=am_forecast")
@@ -94,20 +94,15 @@ class User:
         return _RANK[self.role] >= _RANK[role]
 
 
-def current_user(
-    x_user: str = Header(default="viewer", alias="X-User"),
-    x_role: str = Header(default="viewer", alias="X-Role"),
-) -> User:
+def current_user(request: Request) -> User:
     """Identify the caller.
 
-    Header-based so the app can sit behind whatever the business already uses
-    for authentication. Swapping in SSO means replacing this one dependency;
-    nothing downstream changes.
+    Delegates to the session layer, so every endpoint that already depends on
+    this became session-backed without being touched. The import is deferred to
+    avoid a cycle: the auth module imports User and ROLES from here.
     """
-    role = (x_role or "viewer").lower()
-    if role not in ROLES:
-        raise HTTPException(status_code=403, detail=f"unknown role '{x_role}'")
-    return User(username=x_user or "unknown", role=role)
+    from .auth import session_user
+    return session_user(request)
 
 
 def require(role: str):

@@ -5,7 +5,7 @@ import { DataTable, Failed, GstBanner, Loading, Notes, Panel } from "../componen
 
 export default function Budget() {
   const qc = useQueryClient();
-  const [scope, setScope] = useState("global");
+  const [scope, setScope] = useState("manager");
   const [manager, setManager] = useState("");
   const [quarter, setQuarter] = useState("");
   const [pct, setPct] = useState("0.075");
@@ -36,15 +36,18 @@ export default function Budget() {
         <div className="form-row">
           <label>Scope
             <select value={scope} onChange={(e) => setScope(e.target.value)}>
-              <option value="global">Global</option>
+              <option value="global">Global — every manager</option>
               <option value="manager">Manager</option>
               <option value="manager_quarter">Manager and quarter</option>
             </select>
           </label>
           {scope !== "global" && (
             <label>Manager
-              <input value={manager} onChange={(e) => setManager(e.target.value)}
-                     placeholder="Sam Stewart" />
+              <select value={manager} onChange={(e) => setManager(e.target.value)}>
+                <option value="">Choose…</option>
+                {[...new Set(d.quarters.map((q: any) => q.canonical_manager))]
+                  .sort().map((m: any) => <option key={m} value={m}>{m}</option>)}
+              </select>
             </label>
           )}
           {scope === "manager_quarter" && (
@@ -66,7 +69,9 @@ export default function Budget() {
             <input value={reason} onChange={(e) => setReason(e.target.value)}
                    placeholder="why this assumption changed" />
           </label>
-          <button disabled={reason.length < 3 || save.isPending}
+          <button className="primary"
+                  disabled={reason.length < 3 || save.isPending
+                            || (scope !== "global" && !manager)}
                   onClick={() => save.mutate({
                     scope,
                     canonical_manager: scope === "global" ? null : manager,
@@ -80,9 +85,15 @@ export default function Budget() {
           </button>
         </div>
         {save.isError && <Failed error={save.error} />}
+        {scope === "global" && (
+          <div className="warning">
+            <strong>Global applies to every manager.</strong> To change one
+            manager, choose Manager scope, or use the control on that manager's
+            own page.
+          </div>
+        )}
         <p className="footnote">
-          Changing the Latest Forecast never changes the Original Forecast or the
-          Budget. A lapse, a removal or a returned cancellation reduces actual
+          Changing the forecast never changes the Budget. A lapse, a removal or a returned cancellation reduces actual
           performance and outlook, not the target.
         </p>
       </Panel>

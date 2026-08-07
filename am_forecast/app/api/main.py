@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -15,6 +16,7 @@ from .core import (
     GST_NOTE, TIMEZONE, User, current_user, fetch_all, fetch_one, meta, to_cents,
 )
 from .analytics import router as analytics_router
+from .auth import router as auth_router
 from .bonus import router as bonus_router
 from .forecast_history import router as forecast_history_router
 from .manager_detail import router as manager_detail_router
@@ -31,8 +33,15 @@ app = FastAPI(
         "recompute income, forecasts, budgets, outlook, outcomes or achievement.\n\n"
         f"{GST_NOTE}"),
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                   allow_headers=["*"])
+# Credentialed requests cannot use a wildcard origin, and should not: the
+# session cookie must only travel to origins we name.
+CORS_ORIGINS = [o for o in os.environ.get(
+    "AM_FORECAST_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if o]
+
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
+app.include_router(auth_router, prefix="/api")
 app.include_router(reporting_router, prefix="/api")
 app.include_router(manager_detail_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
@@ -44,6 +53,7 @@ app.include_router(operations_router, prefix="/api")
 
 @app.get("/api/health", tags=["system"])
 def health():
+    """Unauthenticated on purpose, so a monitor can poll it."""
     row = fetch_one("SELECT cut_off_date FROM reporting_settings WHERE id = 1")
     return {"status": "ok", "cut_off_date": row["cut_off_date"], "timezone": TIMEZONE,
             "gst_note": GST_NOTE}

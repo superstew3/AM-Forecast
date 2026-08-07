@@ -226,3 +226,71 @@ def test_history_totals_match_the_snapshot(client, conn):
 
 def test_history_rejects_an_unknown_manager(client):
     assert client.get("/api/forecast-history?manager=Nobody").status_code == 404
+
+
+# --- scope guards --------------------------------------------------------------
+
+def test_naming_a_manager_with_global_scope_is_refused(admin):
+    """The dangerous reading of this payload is the silent one.
+
+    A manager named alongside global scope used to be ignored, so a change
+    intended for one person moved everybody's budget.
+    """
+    res = admin.post("/api/budget/growth-rate", json={
+        "scope": "global", "canonical_manager": "Liam Thornton",
+        "growth_pct": 0.20, "reason": "contradictory scope"})
+    assert res.status_code == 400
+    assert "applies to every manager" in res.json()["detail"]
+
+
+def test_manager_scope_requires_a_manager(admin):
+    res = admin.post("/api/budget/growth-rate", json={
+        "scope": "manager", "canonical_manager": None,
+        "growth_pct": 0.20, "reason": "no manager named"})
+    assert res.status_code == 400
+    assert "requires a manager" in res.json()["detail"]
+
+
+def test_quarter_scope_requires_year_and_quarter(admin):
+    res = admin.post("/api/budget/growth-rate", json={
+        "scope": "manager_quarter", "canonical_manager": "Sam Stewart",
+        "growth_pct": 0.20, "reason": "missing quarter"})
+    assert res.status_code == 400
+    assert "financial_quarter" in res.json()["detail"]
+
+
+def test_a_manager_change_moves_only_that_manager(admin, conn):
+    """The report behind the original complaint, asserted end to end."""
+    def budgets():
+        return {r["canonical_manager"]: Decimal(str(r["total_budget"]))
+                for r in admin.get("/api/budget?financial_year=2026").json()["quarters"]
+                if r["financial_quarter"] == 1}
+
+    before = budgets()
+    res = admin.post("/api/budget/growth-rate", json={
+        "scope": "manager", "canonical_manager": "Liam Thornton",
+        "financial_year": 2026, "growth_pct": 0.20,
+        "reason": "single manager change"})
+    assert res.status_code == 200
+    after = budgets()
+    assert after["Liam Thornton"] > before["Liam Thornton"]
+    for name, value in before.items():
+        if name != "Liam Thornton":
+            assert after[name] == value, f"{name} moved and should not have"
+
+
+def test_quarter_scope_moves_only_that_quarter(admin):
+    def q_budget(q):
+        return next(Decimal(str(r["total_budget"]))
+                    for r in admin.get("/api/budget?financial_year=2026").json()["quarters"]
+                    if r["canonical_manager"] == "Retail" and r["financial_quarter"] == q)
+
+    before = {q: q_budget(q) for q in (1, 2, 3, 4)}
+    res = admin.post("/api/budget/growth-rate", json={
+        "scope": "manager_quarter", "canonical_manager": "Retail",
+        "financial_year": 2026, "financial_quarter": 3, "growth_pct": 0.30,
+        "reason": "one quarter only"})
+    assert res.status_code == 200
+    assert q_budget(3) > before[3]
+    for q in (1, 2, 4):
+        assert q_budget(q) == before[q], f"Q{q} moved and should not have"

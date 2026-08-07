@@ -19,10 +19,9 @@ from app.importers import accept, prepare, rollback
 from app.importers.service import ImportError_
 from app.matching import apportion, manual_match, reject_match, run_matching
 
-from conftest import RENEWALS_FILE
-
 CENT = Decimal("0.01")
 ROOT = Path(__file__).resolve().parents[1]
+RENEWALS_FILE = "/mnt/user-data/uploads/Renewals_Pending_Summary_-_now-june2027.csv"
 BASE_CUT_OFF = dt.date(2026, 7, 31)
 FIXTURE_MONTH = dt.date(2026, 8, 1)
 

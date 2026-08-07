@@ -16,9 +16,9 @@ from app.importers import (
 )
 from app.importers.normalise import dec, transaction_fingerprint
 
-from conftest import RENEWALS_FILE, SALES_FILE
-
 CENT = Decimal("0.01")
+SALES_FILE = "/mnt/user-data/uploads/Sales_Transaction_List_25-26.csv"
+RENEWALS_FILE = "/mnt/user-data/uploads/Renewals_Pending_Summary_-_now-june2027.csv"
 
 
 def scalar(conn, sql, params=None):

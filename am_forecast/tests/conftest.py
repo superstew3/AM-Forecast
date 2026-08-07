@@ -1,39 +1,18 @@
 import sys
 from pathlib import Path
 
+import os
+
 import psycopg2
 import pytest
 
+# The suite drives the API with X-User / X-Role headers rather than signing in
+# for every one of 200-odd tests. That path exists only when this flag is set,
+# and it must never be set in production. tests/test_stage10_auth.py asserts
+# that with the flag unset a session is the only way in.
+os.environ.setdefault("AM_FORECAST_DEV_AUTH", "1")
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import os
-from pathlib import Path
-
-# Source fixtures live outside the repo. Override with
-# AM_FORECAST_FIXTURES; tests needing them skip when absent.
-FIXTURE_DIR = Path(os.environ.get("AM_FORECAST_FIXTURES",
-                                  "/mnt/user-data/uploads"))
-SALES_FILE = str(FIXTURE_DIR / "Sales_Transaction_List_25-26.csv")
-RENEWALS_FILE = str(FIXTURE_DIR / "Renewals_Pending_Summary_-_now-june2027.csv")
-
-
-def pytest_collection_modifyitems(config, items):
-    """Skip fixture-dependent tests when the source files are absent.
-
-    These tests re-import the raw CSVs to exercise the import and
-    matching paths. Without the files they cannot run, and skipping
-    is more honest than erroring.
-    """
-    if FIXTURE_DIR.is_dir():
-        return
-    skip = pytest.mark.skip(
-        reason=f"source fixtures not found at {FIXTURE_DIR}; "
-               "set AM_FORECAST_FIXTURES")
-    for item in items:
-        if item.module.__name__.split(".")[-1] in (
-                "test_stage2_import", "test_stage3_forecast",
-                "test_stage4_matching"):
-            item.add_marker(skip)
 
 
 def pytest_addoption(parser):

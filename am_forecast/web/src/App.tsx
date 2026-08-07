@@ -1,9 +1,13 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { api, currentIdentity, setIdentity } from "./lib/api";
+import { useEffect, useState } from "react";
+import { NotSignedIn, api } from "./lib/api";
+import ChangePassword from "./pages/ChangePassword";
+import Login from "./pages/Login";
 import Business from "./pages/Business";
 import AllManagers from "./pages/AllManagers";
 import ManagerDetail from "./pages/ManagerDetail";
+import ManagerIndex from "./pages/ManagerIndex";
 import Managers from "./pages/Managers";
 import ForecastHistory from "./pages/ForecastHistory";
 import Returns from "./pages/Returns";
@@ -18,7 +22,7 @@ import Budget from "./pages/Budget";
 
 const AREAS = [
   { to: "/business", label: "Business performance" },
-  { to: "/manager", label: "Account manager" },
+  { to: "/managers-index", label: "Account managers" },
   { to: "/all-managers", label: "All managers by month" },
   { to: "/managers", label: "Compare managers" },
   { to: "/forecast-history", label: "Forecast history" },
@@ -34,7 +38,28 @@ const AREAS = [
 ];
 
 export default function App() {
-  const session = useQuery({ queryKey: ["session"], queryFn: api.session });
+  const [user, setUser] = useState<any | null>(null);
+  const [checking, setChecking] = useState(true);
+
+  // Ask the server who we are. The cookie is HttpOnly, so this is the only way
+  // the interface can know whether a session exists.
+  useEffect(() => {
+    api.me()
+      .then(setUser)
+      .catch((e) => { if (!(e instanceof NotSignedIn)) console.error(e); })
+      .finally(() => setChecking(false));
+  }, []);
+
+  if (checking) return <div className="login-shell"><div className="state loading">Loading…</div></div>;
+  if (!user) return <Login onSignedIn={setUser} />;
+  if (user.must_change_password) {
+    return <ChangePassword displayName={user.display_name}
+                           onDone={() => api.me().then(setUser)} />;
+  }
+  return <Shell user={user} onSignOut={() => api.logout().then(() => setUser(null))} />;
+}
+
+function Shell({ user, onSignOut }: { user: any; onSignOut: () => void }) {
   const base = useQuery({ queryKey: ["base"], queryFn: api.basePosition });
 
   return (
@@ -57,17 +82,12 @@ export default function App() {
           ))}
         </nav>
         <div className="identity">
-          <label>
-            Role
-            <select defaultValue={currentIdentity().role}
-                    onChange={(e) => { setIdentity("sam", e.target.value);
-                                       window.location.reload(); }}>
-              <option value="viewer">Viewer</option>
-              <option value="manager">Manager</option>
-              <option value="administrator">Administrator</option>
-            </select>
-          </label>
-          <small>{session.data?.username ?? "…"} &middot; {session.data?.role ?? ""}</small>
+          <div className="identity-name">{user.display_name}</div>
+          <div className="identity-role">
+            {user.email}
+            <span className={`role-chip role-${user.role}`}>{user.role}</span>
+          </div>
+          <button className="signout" onClick={onSignOut}>Sign out</button>
         </div>
         {base.data && !base.data.is_base_state && (
           <div className="warning small">
@@ -80,6 +100,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/business" replace />} />
           <Route path="/business" element={<Business />} />
+          <Route path="/managers-index" element={<ManagerIndex />} />
           <Route path="/manager" element={<ManagerDetail />} />
           <Route path="/all-managers" element={<AllManagers />} />
           <Route path="/managers" element={<Managers />} />
