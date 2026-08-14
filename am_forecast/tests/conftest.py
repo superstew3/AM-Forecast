@@ -16,12 +16,123 @@ os.environ.setdefault("AM_FORECAST_DEV_AUTH", "1")
 # tests at a new export is a single change rather than a hunt through every
 # file — which is what made the last dataset change so laborious.
 #
-# Override with AM_FORECAST_FIXTURES; tests needing them skip when absent.
+# Override the directory with AM_FORECAST_FIXTURES; tests needing the files skip
+# when they are absent.
 FIXTURE_DIR = Path(os.environ.get("AM_FORECAST_FIXTURES", "/mnt/user-data/uploads"))
-SALES_FILE = str(FIXTURE_DIR / "McMc_Partners_20260811_Sales_Transaction_List.csv")
-RENEWALS_FILE = str(FIXTURE_DIR / "McMc_Partners_20260811_Renewals_Pending_Summary.csv")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _recency_key(path: Path, file_type: str):
+    """How new an export is, judged from its contents rather than its name.
+
+    Renewals: the earliest expiry it contains. A pending report cannot hold
+    renewals that have already happened, so the later that earliest expiry, the
+    later the extract — the same inference the importer uses to stop an older
+    file overwriting a newer forecast.
+
+    Sales: the latest transaction it contains.
+
+    Parsed with the application's own date reader, not compared as text. These
+    exports do not agree on a date format: one writes 31/08/2026, another
+    2026-08-01. Sorting those as strings ranked a April extract above an August
+    one, which is precisely the mistake this tiebreak exists to prevent.
+    """
+    import datetime as dt
+
+    try:
+        import polars as pl
+
+        from app.importers.normalise import parse_date
+
+        column = "ExpiryDate" if file_type == "renewals" else "TransactionDate"
+        raw = pl.read_csv(str(path), infer_schema_length=0)[column].drop_nulls().to_list()
+        parsed = []
+        for value in raw:
+            try:
+                parsed.append(parse_date(value))
+            except Exception:
+                continue
+        if not parsed:
+            return dt.date.min
+        return min(parsed) if file_type == "renewals" else max(parsed)
+    except Exception:
+        return dt.date.min
+
+
+def _discover(file_type: str) -> str:
+    """The one file in FIXTURE_DIR that the app detects as this report type.
+
+    These were two hard-coded filenames from one particular export. A deployment
+    holding the same two reports under its own names then failed every test that
+    opened them — fifty failures, seventeen errors, all of them one filename that
+    did not exist. Worse, the failure was FileNotFoundError rather than a skip,
+    so it read as fifty broken tests rather than as a missing fixture.
+
+    Detection is the application's own, the same routine the upload screen uses,
+    so the suite follows whatever export is actually present rather than what it
+    was once called.
+
+    Where a directory holds more than one export of a type, the newest wins.
+    Taking whichever sorted first quietly selected a months-old extract sitting
+    beside the current one — the same way round as the bug that let an April file
+    wipe August's forecast, and just as invisible.
+    """
+    if not FIXTURE_DIR.is_dir():
+        return str(FIXTURE_DIR / f"{file_type}-not-found.csv")
+
+    candidates = sorted(FIXTURE_DIR.glob("*.csv"))
+    matched: list[Path] = []
+    try:
+        from app.importers import detect
+
+        for path in candidates:
+            try:
+                d = detect(str(path))
+            except Exception:
+                continue
+            if d.file_type == file_type and d.usable:
+                matched.append(path)
+    except Exception:
+        pass
+
+    if not matched:
+        word = "sales" if file_type == "sales" else "renewals"
+        matched = [p for p in candidates if word in p.name.lower()]
+    if not matched:
+        return str(FIXTURE_DIR / f"{file_type}-not-found.csv")
+    if len(matched) == 1:
+        return str(matched[0])
+    return str(max(matched, key=lambda p: (_recency_key(p, file_type), p.name)))
+
+
+SALES_FILE = _discover("sales")
+RENEWALS_FILE = _discover("renewals")
+
+
+def pytest_configure(config):
+    """Stop once, clearly, when the source exports are not where the suite looks.
+
+    Missing files previously surfaced as FileNotFoundError inside thirty-odd
+    tests and seventeen fixture errors, which reads as a broken application
+    rather than as an unset path. One line naming the directory and what is
+    missing is worth more than fifty tracebacks that all say the same thing.
+
+    A hard stop rather than a skip: the database under test was built from these
+    files, so a run without them is not a narrower run, it is a meaningless one.
+    """
+    missing = [label for label, path in (("sales transaction", SALES_FILE),
+                                         ("renewals pending", RENEWALS_FILE))
+               if not Path(path).is_file()]
+    if missing:
+        raise pytest.UsageError(
+            f"Source export not found: {', '.join(missing)}.\n"
+            f"Looked in: {FIXTURE_DIR}\n"
+            f"Set AM_FORECAST_FIXTURES to the directory holding the sales and "
+            f"renewals CSVs, for example:\n"
+            f"    AM_FORECAST_FIXTURES=fixtures pytest tests/ --dsn \"$DATABASE_URL\"\n"
+            f"The files are matched by content, not by name, so they do not need "
+            f"renaming.")
 
 
 def pytest_addoption(parser):
