@@ -178,7 +178,11 @@ _POLICY_COLUMNS = (
     "underwriter_abbrev", "inception_date", "expiry_date", "next_expiry_date",
     "renewal_months", "forecast_month", "financial_year", "financial_quarter",
     "source_manager", "comm", "comm_tax", "fee", "fee_tax", "premium",
-    "total_premium", "exception_flags", "is_excluded", "exclusion_rule_id",
+    "total_premium",
+    # The associate columns drive expected income; comm and fee above are
+    # retained as the gross figure for audit only.
+    "primary_assoc_comm_sum", "primary_assoc_comm_tax_sum", "primary_assoc_abbrev",
+    "exception_flags", "is_excluded", "exclusion_rule_id",
     "exclusion_field", "exclusion_value",
 )
 
@@ -188,7 +192,21 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
                      accepted_by: str = "import:accept") -> dict:
     cur.execute("SELECT cut_off_date FROM reporting_settings WHERE id=1")
     cut_off = cur.fetchone()[0]
-    as_of = as_of or cut_off
+
+    # When the extract was taken, inferred from the file rather than defaulting
+    # to the cut-off.
+    #
+    # A Renewals Pending report lists policies that have not yet renewed, so its
+    # earliest expiry date is close to the day it was run: an extract taken in
+    # August cannot still be carrying April renewals. Defaulting every snapshot
+    # to the cut-off made them all look equally recent, which meant an older
+    # extract could silently replace a fuller forecast for a month still ahead.
+    if as_of is None:
+        cur.execute("""SELECT MIN(period_month) FROM import_staging
+                       WHERE batch_id = %s AND period_month IS NOT NULL""",
+                    (batch_id,))
+        earliest = cur.fetchone()[0]
+        as_of = earliest or cut_off
 
     cur.execute("""
         SELECT COUNT(*), COUNT(*) FILTER (WHERE is_excluded),
@@ -226,6 +244,36 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
     # Original Forecast: established only for months that have none, and only
     # for months after the reporting cut-off. A completed month keeps its
     # baseline; later uploads move Latest Forecast alone.
+    # Open months this snapshot covers are cleared first, so a newer file
+    # replaces the forecast for a month still ahead rather than adding a second
+    # set of rows to it.
+    #
+    # Only where the snapshot is genuinely newer. "Later information is better
+    # information" holds only if it is later: loading an older extract must not
+    # overwrite a month with the thinner view that extract had of it. An April
+    # file carries two August policies because August was months away; letting
+    # it replace a full August forecast would destroy the figure while looking
+    # like a routine update.
+    #
+    # Closed and pinned months are excluded by the same conditions used below,
+    # so nothing already measured against can be removed here.
+    cur.execute("""
+        DELETE FROM original_forecast o
+        WHERE o.forecast_month > date_trunc('month', %s::date)
+          AND NOT EXISTS (SELECT 1 FROM forecast_month_lock l
+                          WHERE l.forecast_month = o.forecast_month AND l.active)
+          AND o.forecast_month IN (
+              SELECT DISTINCT forecast_month FROM forecast_policy
+              WHERE snapshot_id = %s AND NOT is_excluded)
+          -- Newer than whatever established the month.
+          AND COALESCE((SELECT MAX(s.as_of_date) FROM forecast_snapshot s
+                        JOIN forecast_policy fp ON fp.snapshot_id = s.id
+                        WHERE fp.forecast_month = o.forecast_month
+                          AND s.id <> %s), DATE '1900-01-01')
+              <= (SELECT as_of_date FROM forecast_snapshot WHERE id = %s)
+    """, (cut_off, snapshot_id, snapshot_id, snapshot_id))
+    replaced = cur.rowcount
+
     cur.execute("""
         INSERT INTO original_forecast
           (grain, policy_id, forecast_month, financial_year, financial_quarter,
@@ -238,11 +286,14 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
                p.raw_expected_income, p.forecast_contribution
         FROM forecast_policy p
         WHERE p.snapshot_id = %s AND NOT p.is_excluded
+          -- Open months only. A month at or before the cut-off is closed: it
+          -- is what it was measured against and is never rewritten.
           AND p.forecast_month > date_trunc('month', %s::date)
-          -- A month that already has any Original Forecast never gets more.
-          -- Tested against original_forecast directly: forecast_month_coverage
-          -- is a derived index and must not be the thing that protects a
-          -- frozen baseline.
+          -- An explicitly pinned month is left alone even while open.
+          AND NOT EXISTS (SELECT 1 FROM forecast_month_lock l
+                          WHERE l.forecast_month = p.forecast_month AND l.active)
+          -- And a month is only written where this snapshot is the newest to
+          -- cover it, so an older extract cannot thin out a fuller forecast.
           AND NOT EXISTS (SELECT 1 FROM original_forecast o
                           WHERE o.forecast_month = p.forecast_month)
         ON CONFLICT DO NOTHING
@@ -258,6 +309,23 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
         ON CONFLICT (forecast_month)
         DO UPDATE SET latest_snapshot_id = EXCLUDED.latest_snapshot_id
     """, (snapshot_id, snapshot_id, snapshot_id, cut_off))
+
+    # Coverage must name the snapshot the Original Forecast rows actually carry.
+    # Replacing an open month above re-establishes those rows under this
+    # snapshot; leaving original_snapshot_id on the superseded one made coverage
+    # and rows disagree about who owns the month, and a later rollback then
+    # deleted rows it believed it had established while coverage still pointed
+    # at a snapshot that no longer had any. Months this snapshot did not write —
+    # closed, pinned, or already established — are untouched.
+    cur.execute("""
+        UPDATE forecast_month_coverage c
+        SET original_snapshot_id = o.snapshot_id
+        FROM (SELECT forecast_month, MAX(established_snapshot_id) AS snapshot_id
+              FROM original_forecast WHERE established_snapshot_id = %s
+              GROUP BY forecast_month) o
+        WHERE c.forecast_month = o.forecast_month
+          AND c.original_snapshot_id IS DISTINCT FROM o.snapshot_id
+    """, (snapshot_id,))
 
     cur.execute("""UPDATE forecast_snapshot SET is_superseded=true
                    WHERE id <> %s AND is_superseded=false""", (snapshot_id,))
@@ -277,6 +345,7 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
 
     return {"snapshot_id": snapshot_id, "policies": len(rows),
             "original_forecast_rows_established": established,
+            "original_forecast_rows_replaced": replaced,
             "forecast_contribution": contrib,
             "movement": movement}
 
@@ -443,6 +512,64 @@ def _rollback_renewals(cur, batch_id: int, force: bool) -> dict:
 
     cur.execute("DELETE FROM original_forecast WHERE established_batch_id=%s", (batch_id,))
     orig_deleted = cur.rowcount
+
+    # Hand the Original Forecast back to the newest surviving snapshot, exactly
+    # as Latest is handed back below. Accepting a snapshot for an open month
+    # replaces that month's Original rows and stamps them with the new batch, so
+    # the delete above removes a baseline an earlier, still-present snapshot had
+    # established. Restoring only Latest left the month with a live forecast and
+    # no budget at all: every manager in it silently lost their target, and the
+    # reconciliation check reported an unexplained gap. Closed and pinned months
+    # never carry this batch's stamp, so they are not reached here; the guards
+    # are repeated anyway so a future change to the accept path cannot let a
+    # rollback rewrite a month that has already been measured against.
+    cur.execute("SELECT cut_off_date FROM reporting_settings WHERE id=1")
+    cut_off = cur.fetchone()[0]
+    cur.execute("""
+        INSERT INTO original_forecast
+          (grain, policy_id, forecast_month, financial_year, financial_quarter,
+           origin, established_snapshot_id, established_batch_id, established_by,
+           source_manager, client_code, policy_number, class_abbrev,
+           expected_income, forecast_contribution)
+        SELECT 'policy', p.policy_id, p.forecast_month, p.financial_year,
+               p.financial_quarter, 'snapshot', p.snapshot_id, s.batch_id,
+               'import:rollback', p.source_manager, p.client_code, p.policy_number,
+               p.class_abbrev, p.raw_expected_income, p.forecast_contribution
+        FROM forecast_policy p
+        JOIN forecast_snapshot s ON s.id = p.snapshot_id
+        JOIN (
+            SELECT fp.forecast_month, MAX(fp.snapshot_id) AS snapshot_id
+            FROM forecast_policy fp
+            WHERE NOT fp.is_excluded AND fp.snapshot_id <> ALL(%s)
+            GROUP BY fp.forecast_month
+        ) newest ON newest.forecast_month = p.forecast_month
+                AND newest.snapshot_id = p.snapshot_id
+        WHERE NOT p.is_excluded
+          AND p.forecast_month > date_trunc('month', %s::date)
+          AND NOT EXISTS (SELECT 1 FROM forecast_month_lock l
+                          WHERE l.forecast_month = p.forecast_month AND l.active)
+          AND NOT EXISTS (SELECT 1 FROM original_forecast o
+                          WHERE o.forecast_month = p.forecast_month)
+        ON CONFLICT DO NOTHING
+    """, (snapshot_ids, cut_off))
+    orig_restored = cur.rowcount
+
+    # Coverage follows those rows, so the month is not left naming a snapshot
+    # that no longer holds its Original Forecast.
+    cur.execute("""
+        UPDATE forecast_month_coverage c
+        SET original_snapshot_id = prev.snapshot_id
+        FROM (
+            SELECT o.forecast_month, MAX(o.established_snapshot_id) AS snapshot_id
+            FROM original_forecast o
+            WHERE o.established_snapshot_id IS NOT NULL
+              AND o.established_snapshot_id <> ALL(%s)
+            GROUP BY o.forecast_month
+        ) prev
+        WHERE c.forecast_month = prev.forecast_month
+          AND c.original_snapshot_id = ANY(%s)
+    """, (snapshot_ids, snapshot_ids))
+
     # Point Latest back at the newest surviving snapshot that covers each month,
     # rather than deleting coverage that belongs to snapshots still in place.
     cur.execute("""
@@ -483,6 +610,7 @@ def _rollback_renewals(cur, batch_id: int, force: bool) -> dict:
     cur.execute("""UPDATE forecast_snapshot SET is_superseded=false
                    WHERE id = (SELECT max(id) FROM forecast_snapshot)""")
     return {"snapshots_deleted": deleted, "original_forecast_rows_deleted": orig_deleted,
+            "original_forecast_rows_restored": orig_restored,
             "forecast_reversed": forecast_reversed}
 
 

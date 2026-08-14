@@ -277,6 +277,17 @@ def run_matching(conn, run_by: str = "system:match", scope_month: dt.date | None
             WHERE (b.competing_policies > 1 OR c.tier = 4)
               AND NOT EXISTS (SELECT 1 FROM match_allocation ma
                               WHERE ma.transaction_id = c.transaction_id)
+              -- A candidate the reviewer has already decided is kept above, not
+              -- cleared, so regenerating it adds a second identical row on every
+              -- run. Nine runs left nine accepted and nine rejected rows for the
+              -- same pair, which inflates anything counting the review queue and
+              -- makes a transaction look as though it has more competing
+              -- policies than it has.
+              AND NOT EXISTS (SELECT 1 FROM match_candidate mc
+                              WHERE mc.transaction_id = c.transaction_id
+                                AND mc.policy_id = c.policy_id
+                                AND mc.forecast_month = c.forecast_month
+                                AND mc.status IN ('accepted', 'rejected'))
         """)
         review_queue = cur.rowcount
 
@@ -416,6 +427,12 @@ def run_matching(conn, run_by: str = "system:match", scope_month: dt.date | None
                           WHERE NOT fp.is_excluded
                             AND fp.forecast_month = date_trunc('month',
                                                     t.transaction_date)::date)
+              -- Same guard as the review queue above: a decided candidate is
+              -- deliberately kept across runs, so regenerating it duplicates it.
+              AND NOT EXISTS (SELECT 1 FROM match_candidate mc
+                              WHERE mc.transaction_id = t.id
+                                AND mc.reason = 'unmatched_actual_renewal'
+                                AND mc.status IN ('accepted', 'rejected'))
         """, {"renewal": list(RENEWAL_CATEGORIES), "cut_month": cut_month})
         unmatched_actuals = cur.rowcount
 
@@ -435,6 +452,11 @@ def run_matching(conn, run_by: str = "system:match", scope_month: dt.date | None
             SELECT po.policy_id, po.forecast_month, 'unmatched_forecast_policy',
                    jsonb_build_object('original_forecast', po.original_forecast_income)
             FROM policy_outcome po WHERE po.outcome = 'unmatched'
+              AND NOT EXISTS (SELECT 1 FROM match_candidate mc
+                              WHERE mc.policy_id = po.policy_id
+                                AND mc.forecast_month = po.forecast_month
+                                AND mc.reason = 'unmatched_forecast_policy'
+                                AND mc.status IN ('accepted', 'rejected'))
         """)
         unmatched_policies = cur.rowcount
 

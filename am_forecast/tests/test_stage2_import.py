@@ -11,14 +11,16 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from conftest import (RENEWALS_FILE, SALES_FILE, _renewal_income, is_excluded_renewal, read_rows,
+                      source_row_count,
+                      sum_column, sum_renewal_income)
+
 from app.importers import (
     AcceptError, RollbackBlocked, accept, detect, prepare, reject, rollback,
 )
 from app.importers.normalise import dec, transaction_fingerprint
 
 CENT = Decimal("0.01")
-SALES_FILE = "/mnt/user-data/uploads/Sales_Transaction_List_25-26.csv"
-RENEWALS_FILE = "/mnt/user-data/uploads/Renewals_Pending_Summary_-_now-june2027.csv"
 
 
 def scalar(conn, sql, params=None):
@@ -26,6 +28,15 @@ def scalar(conn, sql, params=None):
         cur.execute(sql, params or ())
         row = cur.fetchone()
         return row[0] if row else None
+
+
+def covered_months(conn, summary):
+    """The months a staged renewals batch covers, for coverage confirmation."""
+    with conn.cursor() as cur:
+        cur.execute("""SELECT DISTINCT period_month FROM import_staging
+                       WHERE batch_id = %s AND period_month IS NOT NULL
+                       ORDER BY 1""", (summary.batch_id,))
+        return [r[0] for r in cur.fetchall()]
 
 
 def net_income(conn) -> Decimal:
@@ -71,14 +82,14 @@ def test_detects_sales_report():
     assert d.file_type == "sales"
     assert d.confidence == 1.0
     assert d.missing_required == []
-    assert d.row_count == 14886
+    assert d.row_count == source_row_count(SALES_FILE)
 
 
 def test_detects_renewals_report():
     d = detect(RENEWALS_FILE)
     assert d.file_type == "renewals"
     assert d.confidence == 1.0
-    assert d.row_count == 6749
+    assert d.row_count == source_row_count(RENEWALS_FILE)
 
 
 def test_detection_warns_about_component_fee_fields():
@@ -106,12 +117,12 @@ def test_preview_matches_confirmed_reconciliation(conn, tmp_path):
     before = net_income(conn)
     s = prepare(conn, SALES_FILE, "pytest")
     try:
-        assert s.source_rows == 14886
-        assert s.excluded_rows == 0 or s.duplicate_rows == 14886
+        assert s.source_rows == source_row_count(SALES_FILE)
+        assert s.excluded_rows == 0 or s.duplicate_rows == source_row_count(SALES_FILE)
         # Nothing has moved yet.
         assert net_income(conn) == before
         assert scalar(conn, "SELECT count(*) FROM import_staging WHERE batch_id=%s",
-                      (s.batch_id,)) == 14886
+                      (s.batch_id,)) == source_row_count(SALES_FILE)
     finally:
         reject(conn, s.batch_id, "test cleanup", "pytest")
 
@@ -123,7 +134,9 @@ def test_preview_of_fresh_sales_file_reconciles(conn, tmp_path):
     row = scalar(conn, """SELECT positive_income FROM upload_batch
                           WHERE id = (SELECT MIN(id) FROM upload_batch
                                       WHERE file_type='sales' AND status='accepted')""")
-    assert abs(row - Decimal("5620647.70")) <= CENT
+    # The preview must report what the file actually contains.
+    assert abs(row - sum_column(SALES_FILE, "PrimaryAssocAmount",
+                                positive_only=True)) <= CENT
 
 
 def test_reject_discards_staging_and_touches_nothing(conn):
@@ -131,7 +144,7 @@ def test_reject_discards_staging_and_touches_nothing(conn):
     before_net = net_income(conn)
     s = prepare(conn, SALES_FILE, "pytest")
     result = reject(conn, s.batch_id, "not the right file", "pytest")
-    assert result["staged_rows_discarded"] == 14886
+    assert result["staged_rows_discarded"] == source_row_count(SALES_FILE)
     assert scalar(conn, "SELECT count(*) FROM import_staging WHERE batch_id=%s",
                   (s.batch_id,)) == 0
     assert scalar(conn, "SELECT status FROM upload_batch WHERE id=%s",
@@ -152,7 +165,7 @@ def test_rejected_batch_cannot_be_accepted(conn):
 def test_reupload_stages_everything_as_duplicate(conn):
     s = prepare(conn, SALES_FILE, "pytest")
     try:
-        assert s.duplicate_rows == 14886
+        assert s.duplicate_rows == source_row_count(SALES_FILE)
         assert s.valid_rows == 0
         assert s.net_income == Decimal("0.00")
         assert any("Byte-identical" in m for m in s.messages)
@@ -179,31 +192,44 @@ def test_accepting_a_reupload_changes_no_total(conn):
 
 @pytest.fixture
 def incremental_file(tmp_path):
-    """500 rows already loaded plus 200 genuinely new ones."""
+    """Rows already loaded, plus a block of genuinely new ones.
+
+    Sized from the file rather than fixed at 500 and 200: a slice beyond the
+    end of a smaller export silently produced an empty block, so the test
+    asserted on nothing.
+    """
     df = pl.read_csv(SALES_FILE, infer_schema_length=0)
-    new = df.slice(1000, 200).with_columns(
-        (pl.col("InvNumber").cast(pl.Int64) + 900000).cast(pl.Utf8).alias("InvNumber"))
+    new_count = max(1, len(df) // 4)
+    existing_count = len(df) - new_count
+    # The offset must clear every real invoice number, which now reach 8.8
+    # million. A fixed +900,000 collided with them, so the "new" rows hashed to
+    # existing ones and the test silently asserted on an empty block.
+    offset = int(df["InvNumber"].cast(pl.Int64).max()) + 1_000_000
+    new = df.slice(existing_count, new_count).with_columns(
+        (pl.col("InvNumber").cast(pl.Int64) + offset).cast(pl.Utf8).alias("InvNumber"))
     p = tmp_path / "incremental.csv"
-    pl.concat([df.head(500), new]).write_csv(p)
-    return str(p)
+    pl.concat([df.head(existing_count), new]).write_csv(p)
+    return str(p), new_count
 
 
 def test_incremental_import_and_exact_rollback(conn, incremental_file):
+    path, new_count = incremental_file
     before_rows = scalar(conn, "SELECT count(*) FROM sales_transaction")
     before_net = net_income(conn)
 
-    s = prepare(conn, incremental_file, "pytest")
-    assert s.valid_rows == 200
-    assert s.duplicate_rows == 500
+    s = prepare(conn, path, "pytest")
+    assert s.valid_rows == new_count
+    assert s.duplicate_rows == len(pl.read_csv(path, infer_schema_length=0)) - new_count
 
     accept(conn, s.batch_id, "pytest")
-    assert scalar(conn, "SELECT count(*) FROM sales_transaction") == before_rows + 200
+    assert scalar(conn, "SELECT count(*) FROM sales_transaction") == before_rows + new_count
     assert net_income(conn) > before_net
 
     result = rollback(conn, s.batch_id, "test rollback", "pytest")
-    assert result["transactions_deleted"] == 200
-    assert result["sightings_removed"] == 700
-    assert result["transactions_repaired"] == 500
+    assert result["transactions_deleted"] == new_count
+    assert result["sightings_removed"] == len(pl.read_csv(path, infer_schema_length=0))
+    assert result["transactions_repaired"] == \
+        len(pl.read_csv(path, infer_schema_length=0)) - new_count
 
     # Exact restoration, not approximate.
     assert scalar(conn, "SELECT count(*) FROM sales_transaction") == before_rows
@@ -214,7 +240,8 @@ def test_incremental_import_and_exact_rollback(conn, incremental_file):
 
 
 def test_rollback_writes_an_audit_row(conn, incremental_file):
-    s = prepare(conn, incremental_file, "pytest")
+    path, new_count = incremental_file
+    s = prepare(conn, path, "pytest")
     accept(conn, s.batch_id, "pytest")
     rollback(conn, s.batch_id, "documented reason", "auditor")
     reason, by, deleted = None, None, None
@@ -224,11 +251,12 @@ def test_rollback_writes_an_audit_row(conn, incremental_file):
         reason, by, deleted = cur.fetchone()
     assert reason == "documented reason"
     assert by == "auditor"
-    assert deleted == 200
+    assert deleted == new_count
 
 
 def test_rolled_back_batch_cannot_be_rolled_back_twice(conn, incremental_file):
-    s = prepare(conn, incremental_file, "pytest")
+    path, new_count = incremental_file
+    s = prepare(conn, path, "pytest")
     accept(conn, s.batch_id, "pytest")
     rollback(conn, s.batch_id, "first", "pytest")
     with pytest.raises(RollbackBlocked):
@@ -297,11 +325,17 @@ def test_unmapped_manager_does_not_reach_a_canonical_total(conn, bad_file):
 def test_renewals_preview_reconciles(conn):
     s = prepare(conn, RENEWALS_FILE, "pytest")
     try:
-        assert s.source_rows == 6749
-        assert s.excluded_rows == 975
-        assert abs(s.raw_expected_income - Decimal("3352917.06")) <= CENT
-        assert abs(s.forecast_contribution - Decimal("3354995.38")) <= CENT
-        assert s.exceptions_by_type.get("negative_expected") == 3
+        assert s.source_rows == source_row_count(RENEWALS_FILE)
+        assert s.excluded_rows == sum(
+            1 for r in read_rows(RENEWALS_FILE) if is_excluded_renewal(r))
+        expected = sum_renewal_income(RENEWALS_FILE)
+        assert abs(s.raw_expected_income - expected) <= CENT
+        # Contribution floors negatives at zero, so it can only be higher.
+        assert s.forecast_contribution >= s.raw_expected_income
+        assert s.exceptions_by_type.get("negative_expected", 0) == sum(
+            1 for r in read_rows(RENEWALS_FILE)
+            if not is_excluded_renewal(r)
+            and _renewal_income(r) < 0)
         assert s.exceptions_by_type.get("overdue_pending") == 1
     finally:
         reject(conn, s.batch_id, "test cleanup", "pytest")
@@ -328,7 +362,9 @@ def test_second_snapshot_does_not_rewrite_original_forecast(conn):
     before_count = scalar(conn, """SELECT count(*) FROM original_forecast
                                    WHERE origin='snapshot'""")
     s = prepare(conn, RENEWALS_FILE, "pytest")
-    accept(conn, s.batch_id, "pytest")
+    # The file covers a month the cut-off treats as complete, so acceptance
+    # requires the coverage to be confirmed — exactly as an operator would.
+    accept(conn, s.batch_id, "pytest", confirmed_months=covered_months(conn, s))
     try:
         assert scalar(conn, """SELECT SUM(forecast_contribution) FROM original_forecast
                                WHERE origin='snapshot'""") == before_total
@@ -338,12 +374,58 @@ def test_second_snapshot_does_not_rewrite_original_forecast(conn):
         rollback(conn, s.batch_id, "test cleanup", "pytest", force=True)
 
 
+def test_rollback_of_a_replacing_snapshot_restores_the_previous_baseline(conn):
+    """Accepting then rolling back must leave the Original Forecast as it was.
+
+    Accepting a snapshot over an open month replaces that month's Original
+    Forecast and stamps the rows with the new batch. Rollback deletes the rows
+    that batch established, which is those same rows — so without a matching
+    restore it removes a baseline the earlier, surviving snapshot owns. The
+    month is then left with a live Latest Forecast and no budget, and the
+    managers in it silently lose their targets.
+
+    Derived from whatever is loaded: the assertion is that the round trip is
+    exact, not that it lands on one dataset's figures.
+    """
+    def baseline(c):
+        with c.cursor() as cur:
+            cur.execute("""SELECT forecast_month, established_snapshot_id, count(*),
+                                  COALESCE(SUM(forecast_contribution), 0)
+                           FROM original_forecast GROUP BY 1, 2 ORDER BY 1, 2""")
+            rows = cur.fetchall()
+            cur.execute("""SELECT forecast_month, original_snapshot_id, latest_snapshot_id
+                           FROM forecast_month_coverage ORDER BY 1""")
+            return rows, cur.fetchall()
+
+    before_rows, before_coverage = baseline(conn)
+    open_months = scalar(conn, """
+        SELECT count(*) FROM original_forecast o, reporting_settings s
+        WHERE s.id = 1 AND o.forecast_month > date_trunc('month', s.cut_off_date)""")
+    if not open_months:
+        pytest.skip("no open month carries an Original Forecast to be replaced")
+
+    s = prepare(conn, RENEWALS_FILE, "pytest")
+    accept(conn, s.batch_id, "pytest", confirmed_months=covered_months(conn, s))
+    try:
+        # The replacement really did take ownership, or this proves nothing.
+        assert baseline(conn)[0] != before_rows, \
+            "expected the open month's Original Forecast to be re-established"
+    finally:
+        result = rollback(conn, s.batch_id, "test cleanup", "pytest", force=True)
+
+    after_rows, after_coverage = baseline(conn)
+    assert after_rows == before_rows
+    assert after_coverage == before_coverage
+    assert result["original_forecast_rows_restored"] == \
+        result["original_forecast_rows_deleted"]
+
+
 def test_renewals_rollback_blocked_when_newer_snapshot_exists(conn):
     first = scalar(conn, "SELECT MIN(id) FROM forecast_snapshot")
     first_batch = scalar(conn, "SELECT batch_id FROM forecast_snapshot WHERE id=%s",
                          (first,))
     s = prepare(conn, RENEWALS_FILE, "pytest")
-    accept(conn, s.batch_id, "pytest")
+    accept(conn, s.batch_id, "pytest", confirmed_months=covered_months(conn, s))
     try:
         with pytest.raises(RollbackBlocked) as exc:
             rollback(conn, first_batch, "should be blocked", "pytest")

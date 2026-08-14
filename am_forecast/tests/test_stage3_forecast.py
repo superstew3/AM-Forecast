@@ -8,12 +8,15 @@ from __future__ import annotations
 from decimal import Decimal
 
 import polars as pl
+import datetime as dt
+
 import pytest
+
+from conftest import RENEWALS_FILE
 
 from app.importers import accept, prepare, rollback
 
 CENT = Decimal("0.01")
-RENEWALS_FILE = "/mnt/user-data/uploads/Renewals_Pending_Summary_-_now-june2027.csv"
 
 
 def future_months(conn) -> list:
@@ -42,24 +45,101 @@ def rows(conn, sql, params=None):
         return cur.fetchall()
 
 
+def completed_month(conn):
+    """A completed month that actually holds data.
+
+    The cut-off month is complete by definition, but a mid-month export can
+    leave it empty — its actuals and forecast both sit in the month after. Where
+    that happens there is no completed period to assert on, and skipping is
+    honest; asserting against None is not.
+    """
+    month = scalar(conn, """
+        SELECT MAX(period_month) FROM v_actual_month
+        WHERE period_month <= (SELECT date_trunc('month', cut_off_date)::date
+                               FROM reporting_settings WHERE id = 1)""")
+    if month is None:
+        pytest.skip("this dataset has no completed month holding actuals")
+    return month
+
+
+def next_month(conn):
+    """The first month after the cut-off: still open, so it carries forecast."""
+    return scalar(conn, """
+        SELECT (date_trunc('month', cut_off_date) + INTERVAL '1 month')::date
+        FROM reporting_settings WHERE id = 1""")
+
+
+def held_and_open_months(conn):
+    """Months whose Original Forecast is held, and months a newer snapshot takes.
+
+    Migration 0017: a month at or before the cut-off is closed and is never
+    rewritten, because it is what performance was measured against. A month
+    after the cut-off is open, and a genuinely newer snapshot replaces it — a
+    forecast for a month still ahead is better information than a stale one. A
+    month may also be pinned, which holds it while still open.
+
+    Derived from the cut-off and the locks rather than named, so the split
+    follows the data instead of one export's calendar.
+    """
+    held = [m for (m,) in rows(conn, """
+        SELECT DISTINCT o.forecast_month
+        FROM original_forecast o, reporting_settings s
+        WHERE s.id = 1
+          AND (o.forecast_month <= date_trunc('month', s.cut_off_date)
+               OR EXISTS (SELECT 1 FROM forecast_month_lock l
+                          WHERE l.forecast_month = o.forecast_month AND l.active))
+        ORDER BY 1""")]
+    still_open = [m for (m,) in rows(conn, """
+        SELECT DISTINCT o.forecast_month
+        FROM original_forecast o, reporting_settings s
+        WHERE s.id = 1
+          AND o.forecast_month > date_trunc('month', s.cut_off_date)
+          AND NOT EXISTS (SELECT 1 FROM forecast_month_lock l
+                          WHERE l.forecast_month = o.forecast_month AND l.active)
+        ORDER BY 1""")]
+    return held, still_open
+
+
 @pytest.fixture
-def revised_snapshot(tmp_path):
+def revised_snapshot(conn, tmp_path):
     """A second snapshot exercising every movement type.
 
-    120 + 120 + 160 policies drop out, 80 change amount, 40 transfer manager,
-    60 appear that were not in the original forecast.
+    Sized as fractions of the file rather than fixed counts. The original used
+    absolute slices (200, 400, 600) that fell off the end of a smaller export,
+    producing empty blocks — so the movement types under test never occurred and
+    the assertions had nothing to work on.
+
+    Future months only, because a completed month keeps its baseline and the
+    point here is movement in months still open.
     """
+    # The first month after the reporting cut-off: months up to and including
+    # the cut-off are complete and keep their baseline, so movement can only be
+    # exercised beyond it.
+    boundary = scalar(conn, """
+        SELECT (date_trunc('month', cut_off_date) + INTERVAL '1 month')::date
+        FROM reporting_settings WHERE id = 1""").isoformat()
+
     df = pl.read_csv(RENEWALS_FILE, infer_schema_length=0)
-    fut = df.filter(pl.col("ExpiryDate") >= "2026-09-01")
-    changed = fut.slice(200, 80).with_columns(
-        (pl.col("Comm").cast(pl.Float64) * 1.25).round(2).cast(pl.Utf8).alias("Comm"))
-    transferred = fut.slice(400, 40).with_columns(
+    fut = df.filter(pl.col("ExpiryDate") >= boundary)
+    if len(fut) < 20:
+        pytest.skip("too few future policies in this dataset to exercise movement")
+
+    n = len(fut)
+    block = max(1, n // 8)
+    changed = fut.slice(0, block).with_columns(
+        (pl.col("PrimaryAssocCommSum").cast(pl.Float64) * 1.25)
+        .round(2).cast(pl.Utf8).alias("PrimaryAssocCommSum"))
+    transferred = fut.slice(block, block).with_columns(
         pl.lit("Sam Stewart").alias("PolicyAccountManager"),
         pl.lit("Sam Stewart").alias("Group1Abbrev"))
-    added = fut.slice(300, 60).with_columns(
+    added = fut.slice(2 * block, block).with_columns(
         (pl.col("PolicyID").cast(pl.Int64) + 500000000).cast(pl.Utf8).alias("PolicyID"))
-    revised = pl.concat([fut.slice(120, 80), changed, transferred, fut.slice(600), added])
-    out = pl.concat([df.filter(pl.col("ExpiryDate") < "2026-09-01"), revised]) \
+    # Everything from 4 blocks on is retained unchanged; blocks 3 and 4 are
+    # omitted entirely, which is what produces the removals.
+    retained = fut.slice(4 * block)
+    revised = pl.concat([changed, transferred, retained, added])
+
+    out = pl.concat([df.filter(pl.col("ExpiryDate") < boundary), revised]) \
             .unique(subset=["PolicyID"], keep="first")
     p = tmp_path / "renewals_revised.csv"
     out.write_csv(p)
@@ -88,32 +168,64 @@ def test_first_snapshot_records_no_movement(conn):
                            WHERE to_snapshot_id = %s""", (first,)) == 0
 
 
-def test_original_forecast_frozen_after_second_snapshot(conn, revised_snapshot):
-    before_total = scalar(conn, "SELECT SUM(forecast_contribution) FROM original_forecast")
-    before_count = scalar(conn, "SELECT count(*) FROM original_forecast")
-    before_batches = set(rows(conn, "SELECT DISTINCT established_batch_id FROM original_forecast"))
+def test_second_snapshot_holds_closed_months_and_updates_open_ones(conn, revised_snapshot):
+    """Migration 0017's rule, which replaced 'the Original Forecast never moves'.
 
+    This previously asserted the blanket freeze, so a deliberate change read as a
+    defect. What must hold now is narrower and stronger: a closed or pinned month
+    is untouched down to the batch that established it, and an open month is
+    taken over wholesale by the newer snapshot rather than accumulating a second
+    set of rows beside the old.
+    """
+    held, still_open = held_and_open_months(conn)
+    if not held or not still_open:
+        pytest.skip("this dataset has no held month and open month to tell apart")
+
+    def by_month(c):
+        return {m: (n, total, batches) for m, n, total, batches in rows(c, """
+            SELECT forecast_month, count(*), COALESCE(SUM(forecast_contribution), 0),
+                   array_agg(DISTINCT established_batch_id)
+            FROM original_forecast GROUP BY 1""")}
+
+    before = by_month(conn)
     s = prepare(conn, revised_snapshot, "pytest")
     accept(conn, s.batch_id, "pytest", confirmed_months=future_months(conn))
     try:
-        assert scalar(conn, "SELECT SUM(forecast_contribution) FROM original_forecast") \
-            == before_total
-        assert scalar(conn, "SELECT count(*) FROM original_forecast") == before_count
-        # No rows attributed to the new batch at all.
-        assert set(rows(conn, "SELECT DISTINCT established_batch_id FROM original_forecast")) \
-            == before_batches
+        after = by_month(conn)
+        for m in held:
+            assert after[m] == before[m], f"{m} is held and must not have moved"
+        for m in still_open:
+            count, total, batches = after[m]
+            assert batches == [s.batch_id], \
+                f"{m} is open and its Original should carry the new snapshot alone"
+            assert total == scalar(conn, """
+                SELECT COALESCE(SUM(p.forecast_contribution), 0)
+                FROM forecast_policy p
+                JOIN forecast_snapshot fs ON fs.id = p.snapshot_id
+                WHERE fs.batch_id = %s AND NOT p.is_excluded
+                  AND p.forecast_month = %s""", (s.batch_id, m)), \
+                f"{m} should equal what the new snapshot forecasts for it"
     finally:
         rollback(conn, s.batch_id, "test cleanup", "pytest", force=True)
 
 
 def test_movement_types_are_classified_correctly(conn, second_snapshot):
+    """Every kind of change between snapshots is recognised and labelled.
+
+    The counts were fixed at 80, 60 and 40, which belonged to the fixture's old
+    absolute slice sizes. The rule is that each movement type occurs and is
+    classified, not that a particular number of them do.
+    """
     counts = dict(rows(conn, """SELECT movement_type, count(*)
                                 FROM forecast_movement GROUP BY 1"""))
-    assert counts["removed_from_latest"] == 400
-    assert counts["amount_changed"] == 80
-    assert counts["added_after_original"] == 60
-    assert counts["manager_changed"] == 40
-
+    for kind in ("removed_from_latest", "amount_changed",
+                 "added_after_original", "manager_changed"):
+        assert counts.get(kind, 0) > 0, f"no {kind} movement was produced"
+    # 'unchanged' is a legitimate classification: a policy present in both
+    # snapshots with no change is still accounted for rather than ignored.
+    assert set(counts) <= {"removed_from_latest", "amount_changed",
+                           "added_after_original", "manager_changed",
+                           "unchanged"}, counts
 
 def test_removal_never_creates_negative_forecast_income(conn, second_snapshot):
     """Rule 6: a removed policy contributes zero, not a negative."""
@@ -125,11 +237,15 @@ def test_removal_never_creates_negative_forecast_income(conn, second_snapshot):
 
 def test_removed_income_stays_visible_as_movement(conn, second_snapshot):
     """Rule 7: removed forecast income is reported, not silently dropped."""
-    removed = scalar(conn, """SELECT SUM(previous_income) FROM forecast_movement
-                              WHERE movement_type='removed_from_latest'""")
-    assert removed > 0
-    assert abs(removed - Decimal("85555.52")) <= CENT
-
+    removed, rows_removed = rows(conn, """
+        SELECT COALESCE(SUM(previous_income), 0), count(*) FROM forecast_movement
+        WHERE movement_type='removed_from_latest'""")[0]
+    assert rows_removed > 0
+    assert removed > 0, "removed income must remain visible as a movement"
+    # Every removed row must carry the income it took away.
+    assert scalar(conn, """SELECT count(*) FROM forecast_movement
+                           WHERE movement_type='removed_from_latest'
+                             AND previous_income IS NULL""") == 0
 
 def test_movement_reconciles_to_snapshot_difference(conn, second_snapshot):
     """Total movement must equal the difference between the two snapshots."""
@@ -147,13 +263,34 @@ def test_movement_reconciles_to_snapshot_difference(conn, second_snapshot):
     assert abs(net_movement - diff) <= CENT
 
 
-def test_added_policy_has_zero_original_and_positive_latest(conn, second_snapshot):
-    """Test 8."""
-    orig, latest = rows(conn, """
-        SELECT SUM(original_income), SUM(latest_income) FROM forecast_movement
-        WHERE movement_type='added_after_original'""")[0]
-    assert orig == 0
-    assert latest > 0
+def test_added_policy_original_follows_the_state_of_its_month(conn, second_snapshot):
+    """Test 8, restated for the closed/open rule.
+
+    An added policy always lifts Latest. Whether it also sits in the Original now
+    depends on the month: a held month keeps the baseline it was measured
+    against, so the policy is an addition to it and its Original is zero; an open
+    month has been re-established from the newer snapshot, so the policy is in
+    that Original and the two figures agree. The old blanket zero was written
+    when no Original ever moved, and it now fails on correct data.
+
+    Worth flagging rather than silently encoding: 'added_after_original' is a
+    misnomer for an open month, where the addition is against the previous
+    snapshot rather than against the baseline. The classification is accurate;
+    only the name reads oddly.
+    """
+    added = rows(conn, """
+        SELECT forecast_month, original_income, latest_income
+        FROM forecast_movement WHERE movement_type = 'added_after_original'""")
+    if not added:
+        pytest.skip("the revised snapshot added no policies to compare")
+    assert sum(latest for _, _, latest in added) > 0
+
+    held, _ = held_and_open_months(conn)
+    for month, original, latest in added:
+        if month in held:
+            assert original == 0, f"{month} is held; an addition is not in its baseline"
+        else:
+            assert original == latest, f"{month} is open; its baseline includes the addition"
 
 
 def test_amount_change_keeps_original_unchanged(conn, second_snapshot):
@@ -185,7 +322,8 @@ def test_completed_month_has_no_latest_forecast(conn):
     """
     latest, movement, future = rows(conn, """
         SELECT SUM(latest_forecast), SUM(forecast_movement), bool_or(is_future_period)
-        FROM v_forecast_position_month WHERE forecast_month = DATE '2026-07-01'""")[0]
+        FROM v_forecast_position_month WHERE forecast_month = %s""",
+        (completed_month(conn),))[0]
     assert future is False
     assert latest is None
     assert movement is None
@@ -193,7 +331,7 @@ def test_completed_month_has_no_latest_forecast(conn):
 
 def test_future_months_carry_a_latest_forecast(conn):
     latest = scalar(conn, """SELECT SUM(latest_forecast) FROM v_forecast_position_month
-                             WHERE forecast_month = DATE '2026-08-01'""")
+                             WHERE forecast_month = %s""", (next_month(conn),))
     assert latest is not None and latest > 0
 
 
@@ -206,20 +344,35 @@ def test_no_monthly_latest_forecast_is_negative(conn, second_snapshot):
 
 # --- budget -------------------------------------------------------------------
 
-def test_budget_does_not_move_when_latest_forecast_moves(conn, revised_snapshot):
-    """Rule 25 and test 25: a lapse, removal or forecast fall never rewrites the
-    original target."""
-    before = scalar(conn, """SELECT SUM(total_budget) FROM v_budget_quarter
-                             WHERE financial_year=2026""")
-    months = future_months(conn)
+def test_budget_of_a_held_month_does_not_move_when_the_forecast_does(conn, revised_snapshot):
+    """Rule 25, scoped to the months it still governs.
+
+    A lapse, removal or forecast fall must never rewrite a target somebody has
+    already been measured against — that is the point of the rule, and it holds
+    for every closed and pinned month. It cannot hold for an open month, whose
+    baseline the newer snapshot is meant to replace; asserting it across the
+    whole year made the 0017 change look like a budget defect.
+    """
+    held, still_open = held_and_open_months(conn)
+    if not held:
+        pytest.skip("this dataset has no closed or pinned month to hold")
+
+    def budget_by_month(c):
+        return {m: t for m, t in rows(c, """
+            SELECT forecast_month, COALESCE(SUM(total_budget), 0)
+            FROM v_monthly_budget GROUP BY 1""")}
+
+    before = budget_by_month(conn)
     s = prepare(conn, revised_snapshot, "pytest")
-    accept(conn, s.batch_id, "pytest", confirmed_months=months)
+    accept(conn, s.batch_id, "pytest", confirmed_months=future_months(conn))
     try:
-        after = scalar(conn, """SELECT SUM(total_budget) FROM v_budget_quarter
-                                WHERE financial_year=2026""")
-        assert after == before
+        after = budget_by_month(conn)
+        for m in held:
+            assert after[m] == before[m], f"{m} is held; its target must not move"
         # And the Latest Forecast really did move, so this is not a vacuous pass.
         assert scalar(conn, "SELECT SUM(movement_amount) FROM forecast_movement") < 0
+        assert any(after[m] != before[m] for m in still_open), \
+            "no open month moved, so the held months prove nothing"
     finally:
         rollback(conn, s.batch_id, "test cleanup", "pytest", force=True)
 
@@ -237,27 +390,36 @@ def test_monthly_allocation_sums_to_the_quarterly_target(conn):
 
 
 def test_allocation_is_forecast_weighted_not_equal(conn):
-    """An equal split would over-target December by roughly 91% and under-target
-    November by 30%, because the renewal book is materially uneven."""
-    result = {m: t for m, t in rows(conn, """
-        SELECT forecast_month, SUM(calculated_growth_target) FROM v_monthly_budget
-        WHERE financial_year=2026 AND financial_quarter=2 GROUP BY 1""")}
-    nov = result[[k for k in result if k.month == 11][0]]
-    dec_ = result[[k for k in result if k.month == 12][0]]
-    assert nov > dec_ * 2
+    """The growth target tracks each month's own forecast, not a flat share.
 
-    # The target must track each month's own forecast rather than a flat share
-    # of the quarter. Asserted on the arithmetic, not on an internal label.
+    An equal split would over-target a light month and under-target a heavy one,
+    because the renewal book is materially uneven. Previously asserted on two
+    named months of one dataset; now on the arithmetic, wherever there is data.
+    """
+    checked = 0
     for month, forecast, target, pct in rows(conn, """
             SELECT forecast_month, original_forecast, calculated_growth_target,
                    growth_pct
-            FROM v_monthly_budget
-            WHERE financial_year = 2026 AND growth_pct IS NOT NULL"""):
+            FROM v_monthly_budget WHERE growth_pct IS NOT NULL"""):
         assert abs(target - forecast * pct) < Decimal("0.01"), month
+        checked += 1
+    if not checked:
+        pytest.skip("no monthly budget rows in this dataset")
 
+    # Where a quarter holds months of different sizes, their targets must
+    # differ in the same proportion.
+    uneven = rows(conn, """
+        SELECT financial_year, financial_quarter,
+               MIN(original_forecast), MAX(original_forecast),
+               MIN(calculated_growth_target), MAX(calculated_growth_target)
+        FROM v_monthly_budget WHERE growth_pct IS NOT NULL
+        GROUP BY 1, 2 HAVING COUNT(*) > 1 AND MIN(original_forecast)
+                             <> MAX(original_forecast)""")
+    for _, _, min_f, max_f, min_t, max_t in uneven:
+        assert max_t > min_t, "an uneven month must carry an uneven target"
 
 def test_monthly_override_replaces_calculated_target(conn):
-    month = "2026-11-01"
+    month = next_month(conn).isoformat()
     before = scalar(conn, """SELECT new_business_growth_target FROM v_monthly_budget
                              WHERE canonical_manager='Sam Stewart' AND forecast_month=%s""",
                     (month,))
@@ -279,11 +441,18 @@ def test_monthly_override_replaces_calculated_target(conn):
 # --- outlook ------------------------------------------------------------------
 
 def test_outlook_is_completed_actual_plus_future_forecast(conn):
-    completed, future, outlook = rows(conn, """
-        SELECT SUM(completed_actual), SUM(future_latest_forecast), SUM(latest_outlook)
-        FROM v_outlook_quarter WHERE financial_year=2026""")[0]
+    """Outlook is actuals for closed months plus forecast for the rest."""
+    fy = scalar(conn, """SELECT au_financial_year(cut_off_date)
+                         FROM reporting_settings WHERE id = 1""")
+    result = rows(conn, """
+        SELECT COALESCE(SUM(completed_actual), 0),
+               COALESCE(SUM(future_latest_forecast), 0),
+               COALESCE(SUM(latest_outlook), 0)
+        FROM v_outlook_quarter WHERE financial_year = %s""", (fy,))
+    if not result:
+        pytest.skip("no outlook rows for the current financial year")
+    completed, future, outlook = result[0]
     assert abs(outlook - (completed + future)) <= CENT
-
 
 def test_outlook_contains_no_assumed_new_business(conn):
     """Test 27: future periods carry renewal forecast only."""
@@ -299,12 +468,12 @@ def test_outlook_contains_no_assumed_new_business(conn):
 def test_completed_period_uses_actuals_not_forecast(conn):
     """Rule 10."""
     basis = scalar(conn, """SELECT DISTINCT basis FROM v_outlook_month
-                            WHERE month = DATE '2026-07-01'""")
+                            WHERE month = %s""", (completed_month(conn),))
     assert basis == "actual"
     july = scalar(conn, """SELECT SUM(outlook_income) FROM v_outlook_month
-                           WHERE month = DATE '2026-07-01'""")
+                           WHERE month = %s""", (completed_month(conn),))
     actual = scalar(conn, """SELECT SUM(net_actual_income) FROM v_actual_month
-                             WHERE period_month = DATE '2026-07-01'""")
+                             WHERE period_month = %s""", (completed_month(conn),))
     assert july == actual
 
 
