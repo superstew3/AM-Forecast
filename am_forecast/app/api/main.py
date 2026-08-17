@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..validation import BASE_POSITION, TOLERANCE as CENT
+from ..validation import INCOME_BASIS, TOLERANCE as CENT
 from .core import (
     DSN,
     GST_NOTE, TIMEZONE, User, current_user, fetch_all, fetch_one, meta, to_cents,
@@ -178,46 +178,72 @@ def base_position(user: User = Depends(current_user)):
     Exposed so the interface can show, and tests can assert, that the production
     position is the supplied base state and not a leftover test scenario.
     """
+    fy = fetch_one("""SELECT au_financial_year(cut_off_date) AS fy
+                      FROM reporting_settings WHERE id = 1""")["fy"]
     live = fetch_one("""
         SELECT (SELECT SUM(forecast_contribution) FROM original_forecast
-                 WHERE financial_year = 2026) AS original_renewal_forecast,
+                 WHERE financial_year = %(fy)s) AS original_renewal_forecast,
                (SELECT SUM(total_budget) FROM v_budget_quarter
-                 WHERE financial_year = 2026) AS total_budget,
+                 WHERE financial_year = %(fy)s) AS total_budget,
                (SELECT SUM(latest_outlook) FROM v_outlook_quarter
-                 WHERE financial_year = 2026) AS latest_outlook,
+                 WHERE financial_year = %(fy)s) AS latest_outlook,
                (SELECT SUM(remaining_budget_gap) FROM v_outlook_quarter
-                 WHERE financial_year = 2026) AS remaining_budget_gap,
+                 WHERE financial_year = %(fy)s) AS remaining_budget_gap,
                (SELECT cut_off_date FROM reporting_settings WHERE id = 1) AS cut_off_date,
                (SELECT count(*) FROM forecast_snapshot) AS snapshots,
-               (SELECT count(*) FROM sales_transaction) AS transactions
-    """)
-    expected = {k: (str(v) if not isinstance(v, (int, str)) else v)
-                for k, v in BASE_POSITION.items()}
+               (SELECT count(*) FROM sales_transaction) AS transactions,
+               (SELECT count(*) FROM sales_transaction
+                 WHERE fingerprint LIKE 'pytest-%%' OR fingerprint LIKE 'synthetic-%%')
+                 AS synthetic_transactions
+    """, {"fy": fy})
 
     def cents(value) -> str | None:
         # Budget derives from a percentage and legitimately carries sub-cent
-        # precision, so the comparison is made at cent resolution rather than on
-        # the raw value.
+        # precision, so the comparison is made at cent resolution.
         result = to_cents(value)
         return None if result is None else str(result)
 
+    forecast = live["original_renewal_forecast"] or 0
+    budget = live["total_budget"] or 0
+    outlook = live["latest_outlook"] or 0
+    gap = live["remaining_budget_gap"] or 0
+
+    # Internal consistency rather than four fixed figures.
+    #
+    # The previous version asserted the exact position of one dataset. That
+    # caught drift, but every figure became wrong the moment a new export was
+    # loaded, and the check had to be rewritten by hand each time — which meant
+    # it was measuring the dataset, not the system. What actually needs to hold
+    # is the relationship between the figures, and that survives new data.
     checks = {
-        "original_renewal_forecast":
-            cents(live["original_renewal_forecast"]) == expected["original_renewal_forecast"],
-        "total_budget": cents(live["total_budget"]) == expected["total_budget"],
-        "latest_outlook": cents(live["latest_outlook"]) == expected["latest_outlook"],
-        "remaining_budget_gap":
-            cents(live["remaining_budget_gap"]) == expected["remaining_budget_gap"],
-        "cut_off_date": str(live["cut_off_date"]) == expected["cut_off_date"],
-        "single_snapshot": live["snapshots"] == 1,
-        "no_synthetic_transactions": live["transactions"] == 14886,
+        "budget_at_or_above_forecast": budget >= forecast,
+        "gap_reconciles_to_budget_less_outlook":
+            abs((budget - outlook) - gap) <= CENT,
+        "forecast_present": forecast > 0,
+        "outlook_present": outlook > 0,
+        "no_synthetic_transactions": live["synthetic_transactions"] == 0,
+        # Transactions after the cut-off are normal: an export taken mid-month
+        # carries part of the current month, which is exactly why the cut-off
+        # sits at the end of the last complete one. What must not happen is a
+        # cut-off that claims a month is complete when the data for it stops
+        # part-way through, so the check is on the month, not the day.
+        "cut_off_month_is_complete": fetch_one("""
+            SELECT COALESCE(MAX(date_trunc('month', transaction_date)::date),
+                            DATE '1900-01-01')
+                   > (SELECT date_trunc('month', cut_off_date)::date
+                      FROM reporting_settings WHERE id = 1)
+                   OR NOT EXISTS (SELECT 1 FROM sales_transaction WHERE NOT is_excluded)
+                   AS ok
+            FROM sales_transaction WHERE NOT is_excluded""")["ok"],
     }
-    return {"expected": expected,
-            "live": {**live, "rounded": {k: cents(live[k]) for k in
-                                         ("original_renewal_forecast", "total_budget",
-                                          "latest_outlook", "remaining_budget_gap")}},
+    return {"live": {**live,
+                     "financial_year": fy,
+                     "rounded": {k: cents(live[k]) for k in
+                                 ("original_renewal_forecast", "total_budget",
+                                  "latest_outlook", "remaining_budget_gap")}},
             "checks": checks,
             "is_base_state": all(checks.values()),
+            "income_basis": INCOME_BASIS,
             "gst_note": GST_NOTE}
 
 

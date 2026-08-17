@@ -68,11 +68,19 @@ across two files and **must be replaced together** — `commit.py` expects
 puts it there. Shipping one without the other fails at the renewals accept with
 `KeyError: 'primary_assoc_comm_sum'`.
 
-Checked across the whole application: `commit.py`, `service.py`, `validation.py`
-and `app/api/main.py` are the only files referencing anything 0016 or later.
-`main.py` needs just one symbol, `INCOME_BASIS`, which `validation.py` supplies —
-so it does **not** need replacing, and the auth-seeding fix made in this repl
-stays untouched.
+| `main.py` | `app/api/main.py` |
+
+I previously said `main.py` did not need replacing. That was wrong. I checked
+whether it referenced 0016-era *schema*, not whether its *imports* matched the
+`validation.py` being shipped. This repl's `main.py` imports `BASE_POSITION`,
+which was renamed to `INCOME_BASIS` — so the application cannot import at all
+until both move together.
+
+**On the auth-seeding fix:** the version supplied already wires bootstrap in, via
+`from ..bootstrap import run` behind `AM_FORECAST_AUTO_MIGRATE`. Keep this repl's
+`app/bootstrap.py` — do not replace it. If anything auth-related then fails,
+report it rather than patching; that would mean the fix touched `main.py` itself
+and needs merging deliberately.
 
 ### Tests — replace `tests/`
 `conftest.py`, `test_stage1.py`, `test_stage2_import.py`,
@@ -156,16 +164,31 @@ Expect **13 managers, forecast $331,676.03, target $356,551.73**.
 
 The script aborts without writing if any manager name fails to resolve.
 
-### 4. Verify August 2026
+### 4. Establish August 2026 from the 14 July extract
+
+`rebuild.sh` does **not** pick this file. It selects the most recent extract by
+inferred pull date, and `Renewals_Pending_Summary_-_now-june2027.csv` is more
+recent than the 14 July one — so the automatic choice is correct by its own rule
+and wrong by yours. August is a deliberate decision, not a heuristic:
+
+```bash
+python3 scripts/set_month_forecast_from_file.py "$DATABASE_URL" \
+    fixtures/McMc_Partners_20260714_Renewals_Pending_Summary.csv \
+    --month=2026-08-01 \
+    --reason="14 July extract: last file pulled before August began"
+```
+
+Expect **$291,970.36 across 14 managers**, and the month pinned against later
+snapshots.
+
+Then confirm, report only:
 
 ```bash
 psql "$DATABASE_URL" -v month="'2026-08-01'" -f scripts/reconcile_month_baseline.sql
 ```
 
-Report only. Expect **14 managers, forecast $291,970.36, target $313,868.14**
-from the 14 July extract, and section 6 confirming a usable source exists.
-
-If it says STOP, the 14 July file is not in `fixtures/`. Do not proceed.
+September 2026 onward keeps whatever `rebuild.sh` loaded from the newer extract,
+which is correct — those months had not started when either file was pulled.
 
 ### 5. Confirm
 
