@@ -259,9 +259,7 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
     # so nothing already measured against can be removed here.
     cur.execute("""
         DELETE FROM original_forecast o
-        WHERE o.forecast_month > date_trunc('month', %s::date)
-          AND NOT EXISTS (SELECT 1 FROM forecast_month_lock l
-                          WHERE l.forecast_month = o.forecast_month AND l.active)
+        WHERE forecast_month_writable(o.forecast_month)
           AND o.forecast_month IN (
               SELECT DISTINCT forecast_month FROM forecast_policy
               WHERE snapshot_id = %s AND NOT is_excluded)
@@ -271,7 +269,7 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
                         WHERE fp.forecast_month = o.forecast_month
                           AND s.id <> %s), DATE '1900-01-01')
               <= (SELECT as_of_date FROM forecast_snapshot WHERE id = %s)
-    """, (cut_off, snapshot_id, snapshot_id, snapshot_id))
+    """, (snapshot_id, snapshot_id, snapshot_id))
     replaced = cur.rowcount
 
     cur.execute("""
@@ -286,18 +284,21 @@ def _accept_renewals(cur, batch_id: int, as_of: dt.date | None,
                p.raw_expected_income, p.forecast_contribution
         FROM forecast_policy p
         WHERE p.snapshot_id = %s AND NOT p.is_excluded
-          -- Open months only. A month at or before the cut-off is closed: it
-          -- is what it was measured against and is never rewritten.
-          AND p.forecast_month > date_trunc('month', %s::date)
-          -- An explicitly pinned month is left alone even while open.
-          AND NOT EXISTS (SELECT 1 FROM forecast_month_lock l
-                          WHERE l.forecast_month = p.forecast_month AND l.active)
-          -- And a month is only written where this snapshot is the newest to
-          -- cover it, so an older extract cannot thin out a fuller forecast.
+          -- The month must be writable: after the current calendar month in
+          -- Melbourne, not pinned, or covered by an unconsumed admin override.
+          --
+          -- This replaces a test against the reporting cut-off. The cut-off is a
+          -- setting somebody maintains, and while it was wrong -- as it was here
+          -- for a week, left at 2025-12-31 by a test run -- every upload wrote
+          -- months it had no business touching. The calendar cannot be left
+          -- stale by accident.
+          AND forecast_month_writable(p.forecast_month)
+          -- A month is only written where nothing already holds it, so an older
+          -- extract cannot thin out a fuller forecast.
           AND NOT EXISTS (SELECT 1 FROM original_forecast o
                           WHERE o.forecast_month = p.forecast_month)
         ON CONFLICT DO NOTHING
-    """, (batch_id, snapshot_id, cut_off))
+    """, (batch_id, snapshot_id))
     established = cur.rowcount
 
     cur.execute("""

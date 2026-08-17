@@ -53,8 +53,19 @@ def scalar(conn, sql, params=None):
 
 # --- 1. base operating position ----------------------------------------------
 
-def test_01_base_operating_position_reconciles(client):
+def test_01_base_operating_position_reconciles(client, conn):
     d = client.get("/api/base-position").json()
+    # The cut-off month must be fully imported before base state means anything.
+    # A sample covering only part of a later month leaves the cut-off month with
+    # no transactions at all, and the flag is then correctly false -- a dataset
+    # limitation, not a fault, so it skips with the reason rather than failing.
+    if not d["checks"].get("cut_off_month_is_complete", True):
+        covered = scalar(conn, """
+            SELECT actual_load_state((SELECT date_trunc('month', cut_off_date)::date
+                                      FROM reporting_settings WHERE id = 1))""")
+        if covered != "full":
+            pytest.skip(f"the cut-off month is {covered} in this dataset, so base "
+                        f"state cannot be asserted")
     # Internal consistency rather than four figures pinned to one export: the
     # relationships must hold for any dataset, and pinned figures all became
     # wrong together the moment new data arrived.

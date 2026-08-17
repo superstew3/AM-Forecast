@@ -222,19 +222,25 @@ def base_position(user: User = Depends(current_user)):
         "forecast_present": forecast > 0,
         "outlook_present": outlook > 0,
         "no_synthetic_transactions": live["synthetic_transactions"] == 0,
-        # Transactions after the cut-off are normal: an export taken mid-month
-        # carries part of the current month, which is exactly why the cut-off
-        # sits at the end of the last complete one. What must not happen is a
-        # cut-off that claims a month is complete when the data for it stops
-        # part-way through, so the check is on the month, not the day.
+        # A cut-off must not claim a month is complete when the data for it
+        # stops part-way through.
+        #
+        # This used to test whether transactions continued into a LATER month,
+        # as a proxy for the cut-off month being fully covered. The proxy breaks
+        # on the commonest case there is: an export ending exactly at month end.
+        # Sales running to 31 July with a 31 July cut-off gave "July is not
+        # complete", which is the one arrangement that is unambiguously correct,
+        # and it failed the whole base-state flag on a healthy database.
+        #
+        # Coverage is now read from what the sales imports actually span, which
+        # is recorded per batch and needs no proxy. A month counts as complete
+        # only when every day of it has been imported -- so a file ending on the
+        # 11th still correctly reports its month incomplete.
         "cut_off_month_is_complete": fetch_one("""
-            SELECT COALESCE(MAX(date_trunc('month', transaction_date)::date),
-                            DATE '1900-01-01')
-                   > (SELECT date_trunc('month', cut_off_date)::date
-                      FROM reporting_settings WHERE id = 1)
+            SELECT actual_load_state((SELECT date_trunc('month', cut_off_date)::date
+                                      FROM reporting_settings WHERE id = 1)) = 'full'
                    OR NOT EXISTS (SELECT 1 FROM sales_transaction WHERE NOT is_excluded)
-                   AS ok
-            FROM sales_transaction WHERE NOT is_excluded""")["ok"],
+                   AS ok""")["ok"],
     }
     return {"live": {**live,
                      "financial_year": fy,

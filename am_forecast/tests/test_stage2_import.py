@@ -398,9 +398,12 @@ def test_rollback_of_a_replacing_snapshot_restores_the_previous_baseline(conn):
             return rows, cur.fetchall()
 
     before_rows, before_coverage = baseline(conn)
+    # Asks the database for the rule rather than restating it against the
+    # cut-off, which stopped matching the importer when it moved to the calendar
+    # month.
     open_months = scalar(conn, """
-        SELECT count(*) FROM original_forecast o, reporting_settings s
-        WHERE s.id = 1 AND o.forecast_month > date_trunc('month', s.cut_off_date)""")
+        SELECT count(*) FROM original_forecast o
+        WHERE forecast_month_is_open(o.forecast_month)""")
     if not open_months:
         pytest.skip("no open month carries an Original Forecast to be replaced")
 

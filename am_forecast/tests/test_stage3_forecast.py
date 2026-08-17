@@ -70,32 +70,25 @@ def next_month(conn):
 
 
 def held_and_open_months(conn):
-    """Months whose Original Forecast is held, and months a newer snapshot takes.
+    """Months whose Original Forecast is held, and months a newer upload takes.
 
-    Migration 0017: a month at or before the cut-off is closed and is never
-    rewritten, because it is what performance was measured against. A month
-    after the cut-off is open, and a genuinely newer snapshot replaces it — a
-    forecast for a month still ahead is better information than a stale one. A
-    month may also be pinned, which holds it while still open.
+    Asks the database rather than restating the rule. This used to derive the
+    split from the reporting cut-off, which stopped matching the importer the
+    moment the importer moved to the calendar month -- the tests then insisted a
+    month was open while the accept path correctly refused to write it, and three
+    of them failed against correct behaviour.
 
-    Derived from the cut-off and the locks rather than named, so the split
-    follows the data instead of one export's calendar.
+    A duplicated rule is the same defect that put a hand-written copy of the
+    exclusion rules in the pin script and left it wrong by $640 for months.
+    forecast_month_is_open() is the one implementation; everything else asks it.
     """
     held = [m for (m,) in rows(conn, """
-        SELECT DISTINCT o.forecast_month
-        FROM original_forecast o, reporting_settings s
-        WHERE s.id = 1
-          AND (o.forecast_month <= date_trunc('month', s.cut_off_date)
-               OR EXISTS (SELECT 1 FROM forecast_month_lock l
-                          WHERE l.forecast_month = o.forecast_month AND l.active))
+        SELECT DISTINCT o.forecast_month FROM original_forecast o
+        WHERE NOT forecast_month_is_open(o.forecast_month)
         ORDER BY 1""")]
     still_open = [m for (m,) in rows(conn, """
-        SELECT DISTINCT o.forecast_month
-        FROM original_forecast o, reporting_settings s
-        WHERE s.id = 1
-          AND o.forecast_month > date_trunc('month', s.cut_off_date)
-          AND NOT EXISTS (SELECT 1 FROM forecast_month_lock l
-                          WHERE l.forecast_month = o.forecast_month AND l.active)
+        SELECT DISTINCT o.forecast_month FROM original_forecast o
+        WHERE forecast_month_is_open(o.forecast_month)
         ORDER BY 1""")]
     return held, still_open
 
@@ -356,6 +349,9 @@ def test_budget_of_a_held_month_does_not_move_when_the_forecast_does(conn, revis
     held, still_open = held_and_open_months(conn)
     if not held:
         pytest.skip("this dataset has no closed or pinned month to hold")
+    if not still_open:
+        pytest.skip("every month in this dataset is already held, so there is "
+                    "nothing a new upload could move")
 
     def budget_by_month(c):
         return {m: t for m, t in rows(c, """
