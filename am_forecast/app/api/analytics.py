@@ -250,11 +250,18 @@ def manager_matrix(financial_year: int = Query(2026),
         FROM v_forecast_position_month WHERE financial_year = %(fy)s
         GROUP BY 1, 2""", params)}
 
+    # Every manager, always. include_non_ranked decides whether a non-ranked
+    # manager is LISTED, never whether their income is COUNTED.
+    #
+    # This used to filter them out of the query, so they vanished from the rows,
+    # the column totals and the grand total together. FY2024 came back at
+    # $754,812.92 against $756,700.56 in the view -- short by $1,887.64, which
+    # was one manager's entire year. A total that quietly omits somebody is worse
+    # than one that shows them awkwardly: it cannot be reconciled against any
+    # other figure in the system, and nothing on screen says a name is missing.
     managers = fetch_all("""SELECT canonical_manager, status, include_in_rankings
                             FROM reporting_manager
-                            WHERE (%(all)s OR include_in_rankings)
-                            ORDER BY display_order NULLS LAST, canonical_manager""",
-                         {"all": include_non_ranked})
+                            ORDER BY display_order NULLS LAST, canonical_manager""")
 
     rows = []
     for m in managers:
@@ -266,7 +273,16 @@ def manager_matrix(financial_year: int = Query(2026),
             a, b, o = (actual.get((name, month)), budget.get((name, month)),
                        original.get((name, month)))
             if measure == "net_actual":
-                v, status = (a, "actual") if started else (None, "future")
+                # A started month with no figure is unavailable, not "actual".
+                # Labelling a null as actual claims a real number that is not
+                # there, and the grid cannot then tell $0.00 from N/A -- which is
+                # the distinction the whole display convention rests on.
+                if not started:
+                    v, status = None, "future"
+                elif a is None:
+                    v, status = None, "unavailable"
+                else:
+                    v, status = a, "actual"
             elif measure == "budget":
                 v, status = b, "actual" if b is not None else "unavailable"
             elif measure == "original_forecast":
@@ -288,6 +304,13 @@ def manager_matrix(financial_year: int = Query(2026),
                      "cells": cells,
                      "total": total if has_any and measure != "achievement" else None})
 
+    # Listed rows honour the flag; totals below never do.
+    listed = rows if include_non_ranked else [r for r in rows
+                                              if r["include_in_rankings"]]
+    excluded_from_listing = [r["canonical_manager"] for r in rows
+                             if not r["include_in_rankings"]
+                             and r["total"] is not None]
+
     column_totals = []
     for i, month in enumerate(months):
         vals = [r["cells"][i]["value"] for r in rows if r["cells"][i]["value"] is not None]
@@ -300,9 +323,12 @@ def manager_matrix(financial_year: int = Query(2026),
     return {"financial_year": financial_year, "measure": measure,
             "months": months,
             "month_status": ["completed" if m <= cut else "future" for m in months],
-            "rows": rows, "column_totals": column_totals,
+            "rows": listed, "column_totals": column_totals,
+            # Everyone, listed or not, so this reconciles against the views.
             "grand_total": (sum(r["total"] for r in rows if r["total"] is not None)
                             if measure != "achievement" else None),
+            "totals_include_non_ranked": True,
+            "non_ranked_in_totals_not_listed": excluded_from_listing,
             "meta": meta(financial_year), "gst_note": GST_NOTE}
 
 
