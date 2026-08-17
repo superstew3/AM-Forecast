@@ -317,10 +317,33 @@ def _fetch(conn, sql):
 
 
 def test_issued_accounts_must_change_password(conn):
-    for email in ("michael@stewartinsurance.com.au", "sam@stewartinsurance.com.au",
-                  "anastasia@stewartinsurance.com.au"):
+    """Issuing an account must force a new password at first sign-in.
+
+    Asserted against three named live accounts, which made it fail the moment
+    somebody actually used the application: signing in and setting a password
+    clears the flag, so a correctly working system turned this red and would have
+    stayed red permanently.
+
+    It also cannot be tested by inserting a row directly -- the column defaults to
+    false, and the rule lives in the issuing code, not the schema. So this calls
+    the real issuing function, which is the only thing that can enforce it.
+    """
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+    from create_users import upsert
+
+    email = "pytest-issued@example.invalid"
+    try:
+        upsert(conn, email, "Pytest Issued", "viewer", "pytest-password-1", None)
+        conn.commit()
         assert scalar(conn, """SELECT must_change_password FROM app_user
-                               WHERE email=%s""", (email,)) is True, email
+                               WHERE email = %s""", (email,)) is True, \
+            "a freshly issued account must require a password change"
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM app_user WHERE email = %s", (email,))
+        conn.commit()
 
 
 # --- deployment resilience ------------------------------------------------------
