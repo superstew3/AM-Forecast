@@ -58,8 +58,21 @@ Paths relative to the repository root.
 | File | Destination |
 |---|---|
 | `commit.py` | `app/importers/commit.py` |
+| `service.py` | `app/importers/service.py` |
 | `engine.py` | `app/matching/engine.py` |
 | `validation.py` | `app/validation.py` |
+
+`service.py` parses an upload; `commit.py` writes it. They are one change split
+across two files and **must be replaced together** — `commit.py` expects
+`primary_assoc_comm_sum` in the parsed policy, and only the matching `service.py`
+puts it there. Shipping one without the other fails at the renewals accept with
+`KeyError: 'primary_assoc_comm_sum'`.
+
+Checked across the whole application: `commit.py`, `service.py`, `validation.py`
+and `app/api/main.py` are the only files referencing anything 0016 or later.
+`main.py` needs just one symbol, `INCOME_BASIS`, which `validation.py` supplies —
+so it does **not** need replacing, and the auth-seeding fix made in this repl
+stays untouched.
 
 ### Tests — replace `tests/`
 `conftest.py`, `test_stage1.py`, `test_stage2_import.py`,

@@ -234,16 +234,22 @@ def _stage_sales(cur, batch_id: int, rows: list[dict], s: PreviewSummary) -> Non
         try:
             td = parse_datetime(r["TransactionDate"])
             commission, fees = dec(r.get("Commission")), dec(r.get("Fees"))
+            # SIG income is the primary associate share, not the gross figure.
+            # Already GST inclusive: this report carries no tax column.
+            primary_assoc = dec(r.get("PrimaryAssocAmount"))
         except (ValueError, KeyError) as exc:
             s.rejected_rows += 1
             _add_exception(exceptions, batch_id, "invalid_value", "error", i, None, None,
                            f"Row rejected: {exc}")
             staged.append((batch_id, i, "rejected", None, None, None, None, None, None,
-                           None, None, None, None, False, None, None, None,
+                           None, None, None, None, None, False, None, None, None,
                            ["parse_error"], str(exc), None, Json({}), Json(r)))
             continue
 
-        amount = commission + fees
+        # Reported income is the associate amount. Commission and fees are
+        # retained on the row for audit and reconciliation, but they are the
+        # gross brokerage figure and overstate what the business receives.
+        amount = primary_assoc
         fp = transaction_fingerprint(r)
         hit = engine.check(r)
         business, derived, fin_dir, unmapped = classify(r.get("Category"), amount, cat_map)
@@ -372,6 +378,11 @@ def _stage_renewals(cur, batch_id: int, rows: list[dict], s: PreviewSummary,
             expiry = parse_date(r["ExpiryDate"])
             comm, comm_tax = dec(r.get("Comm")), dec(r.get("CommTax"))
             fee, fee_tax = dec(r.get("Fee")), dec(r.get("FeeTax"))
+            # The associate columns are the SIG share. CommSum is GST
+            # exclusive and CommTaxSum is its GST, so both are needed to match
+            # the GST-inclusive sales figures.
+            pa_comm_sum = dec(r.get("PrimaryAssocCommSum"))
+            pa_comm_tax_sum = dec(r.get("PrimaryAssocCommTaxSum"))
             policy_id = intn(r.get("PolicyID"))
             if policy_id is None:
                 raise ValueError("PolicyID is missing")
@@ -380,11 +391,13 @@ def _stage_renewals(cur, batch_id: int, rows: list[dict], s: PreviewSummary,
             _add_exception(exceptions, batch_id, "invalid_value", "error", i, None, None,
                            f"Row rejected: {exc}")
             staged.append((batch_id, i, "rejected", None, None, None, None, None, None,
-                           None, None, None, None, False, None, None, None,
+                           None, None, None, None, None, False, None, None, None,
                            ["parse_error"], str(exc), None, Json({}), Json(r)))
             continue
 
-        raw = comm + comm_tax + fee + fee_tax
+        # Gross would be comm + comm_tax + fee + fee_tax. Expected income is
+        # the associate share instead, GST inclusive.
+        raw = pa_comm_sum + pa_comm_tax_sum
         contribution = max(raw, ZERO)
         hit = engine.check(r)
         canonical = resolve_manager(r.get("PolicyAccountManager"), alias_map)
@@ -464,6 +477,9 @@ def _stage_renewals(cur, batch_id: int, rows: list[dict], s: PreviewSummary,
             "fee": str(fee), "fee_tax": str(fee_tax),
             "premium": str(dec(r.get("Premium"))),
             "total_premium": str(dec(r.get("TotalPremium"))),
+            "primary_assoc_comm_sum": str(pa_comm_sum),
+            "primary_assoc_comm_tax_sum": str(pa_comm_tax_sum),
+            "primary_assoc_abbrev": r.get("PrimaryAssocAbbrev"),
             "exception_flags": [f for f in flags if f in
                                 ("negative_expected", "zero_expected",
                                  "overdue_pending", "residual_pending")],
