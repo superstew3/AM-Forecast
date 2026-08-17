@@ -39,10 +39,7 @@ CLASS_OUT = {
     "CONTRACT WORKS": "CONTRACTWK", "MARINE CARGO": "MARINECARG",
 }
 
-# Fixture invoice numbers must not collide with real ones, which now reach
-# 8.8 million. A collision makes synthetic rows hash to existing transactions,
-# so they import as duplicates and the fixture silently produces nothing.
-BASE_INVOICE = 90_000_000
+BASE_INVOICE = 8_800_000
 
 
 def row(**kw) -> dict:
@@ -94,16 +91,11 @@ def build(dsn: str, month: dt.date) -> list[dict]:
         inv += 1
         commission = (Decimal(str(income)) * Decimal("0.8")).quantize(Decimal("0.01"))
         fees = Decimal(str(income)) - commission
-        # Reported income is the primary associate amount, not commission plus
-        # fees. Leaving this at zero gave every fixture row nil income, so the
-        # matching assertions had nothing to work with.
-        primary_assoc = Decimal(str(income))
         rows.append(row(
             Group1Abbrev=manager, Group2Description=category, Code=client,
             TransactionDate=(expiry + dt.timedelta(days=day_offset)).strftime(
                 "%Y-%m-%d 10:00:00"),
             InvNumber=str(invoice), PolicyNumber=polnum, Category=category,
-            PrimaryAssocAmount=str(primary_assoc),
             Commission=str(commission), Fees=str(fees),
             PolicyClass=policy_class or CLASS_OUT.get(cls.upper(), "BUSINESS"),
         ))

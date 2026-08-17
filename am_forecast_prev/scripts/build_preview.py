@@ -14,17 +14,11 @@ import base64
 import datetime as dt
 import html
 import os
-import os
 import sys
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# The preview is a local review tool that renders every page from live data. It
-# runs the API in-process, so it needs an identity; the development header path
-# is the least intrusive way to get one. Never set this in a served process.
-os.environ.setdefault("AM_FORECAST_DEV_AUTH", "1")
 sys.path.insert(0, str(ROOT))
 
 CENT = Decimal("0.01")
@@ -262,8 +256,8 @@ def build(client) -> str:
 
     business_html += panel(
         "Against budget",
-        "Budget is the Renewal Forecast grown by each manager's own growth "
-        "percentage. Achievement is measured only on months that have started.",
+        "Budget is the Original Renewal Forecast plus the new business growth "
+        "target. It does not move when the Latest Forecast moves.",
         gauge_html(yoy["ytd_actual"]["value"], yoy["ytd_budget"]["value"],
                    "year-to-date budget")
         + '<div class="metric-grid" style="margin-top:14px">'
@@ -307,23 +301,23 @@ def build(client) -> str:
         + "</div>")
 
     business_html += panel(
-        "Renewal forecast",
-        "The forecast the budget is built on. Completed months keep the figure "
-        "they were measured against; future months update when a newer Renewals "
-        "Pending file is loaded.",
+        "Renewal forecast", "",
         '<div class="metric-grid">'
-        + metric("Renewal Forecast", money(biz["original_renewal_forecast"]))
-        + metric("Total Budget", money(yoy["full_year_budget"]),
-                 hint="Renewal Forecast plus the new business growth target.")
-        + metric("Latest Outlook", money(yoy["latest_outlook"]))
+        + metric("Original Renewal Forecast", money(biz["original_renewal_forecast"]))
+        + metric("Latest Renewal Forecast", money(biz["latest_renewal_forecast"]),
+                 hint="A completed month has no Latest Forecast; it reports actuals.")
+        + metric("Forecast Movement", money(biz["forecast_movement"]))
         + "</div>")
 
     # --- managers ------------------------------------------------------------
     mgr_cols = [
         {"label": "Manager", "render": lambda r: html.escape(r["canonical_manager"])},
         {"label": "Qtr", "render": lambda r: f'Q{r["financial_quarter"]}'},
-        {"label": "Renewal Forecast", "right": 1,
+        {"label": "Original Forecast", "right": 1,
          "render": lambda r: money(r["original_forecast"])},
+        {"label": "Latest Forecast", "right": 1,
+         "hint": "N/A for completed months, which report actuals.",
+         "render": lambda r: money(r["latest_forecast"])},
         {"label": "Net Actual", "right": 1,
          "render": lambda r: money(r["net_actual_income"])},
         {"label": "Return Income", "right": 1,
@@ -960,7 +954,6 @@ def main() -> int:
 
     from app.api import app
     with TestClient(app) as client:
-        client.headers.update({"X-User": "preview", "X-Role": "administrator"})
         html_out = build(client)
     Path(sys.argv[2]).write_text(html_out)
     print(f"wrote {len(html_out):,} bytes to {sys.argv[2]}")

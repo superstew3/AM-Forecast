@@ -110,10 +110,6 @@ CATEGORY_MAP = [
     ("ADJ", "Adjustment", "Adjustment or correction, positive or negative"),
     ("ECN", "Endorsement Cancellation", "Endorsement cancellation"),
     ("CCN", "Policy Reinstatement", "Policy reinstatement, may be positive or negative"),
-    # Appears in later exports as a cancellation raised to correct an error.
-    # Always negative, so it belongs with the other cancellations rather than
-    # with lapses, which represent lost business.
-    ("CLN", "Mid-Term Cancellation", "Cancellation, typically an error correction"),
 ]
 
 # --- forecast baselines ------------------------------------------------------
@@ -198,13 +194,6 @@ PERIOD_COVERAGE = [
 # --- settings ----------------------------------------------------------------
 
 REPORTING_SETTINGS = {
-    # Initial value only: the seed no longer overwrites this on re-run. An
-    # administrator moves it forward as each month closes, on the Settings page.
-    #
-    # It must sit at the end of the last month that is genuinely complete. Set
-    # too far forward, a month still being transacted is treated as closed: its
-    # renewals are never promoted to the forecast, so there is no baseline and
-    # no budget, and the cause is not obvious from any screen.
     "cut_off_date": dt.date(2026, 7, 31),
     "match_date_tolerance_days": 45,
     "default_growth_pct": Decimal("0.0750"),

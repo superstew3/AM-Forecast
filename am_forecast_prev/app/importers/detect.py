@@ -30,10 +30,7 @@ class ReportSignature:
 SALES = ReportSignature(
     file_type="sales",
     label="Sales Transaction Report",
-    required=("TransactionDate", "Category", "Commission", "Fees", "Group1Abbrev",
-              # Income now derives from this column, so a file without it
-              # cannot be reported on and must not be accepted.
-              "PrimaryAssocAmount"),
+    required=("TransactionDate", "Category", "Commission", "Fees", "Group1Abbrev"),
     strong=("InvNumber", "SubComm", "PrimaryAssocCode", "TransactionDate", "Category"),
     optional=("Group1ID", "Group2ID", "Group2Description", "ClientID", "Code", "Username",
               "PolicyNumber", "Premium", "Nett", "PrimaryAssocAmount", "SecondaryAssocCode",
@@ -45,7 +42,6 @@ RENEWALS = ReportSignature(
     file_type="renewals",
     label="Renewals Pending Report",
     required=("PolicyID", "ExpiryDate", "Comm", "CommTax", "Fee", "FeeTax",
-              "PrimaryAssocCommSum", "PrimaryAssocCommTaxSum",
               "PolicyAccountManager"),
     strong=("PolicyID", "NextExpiryDate", "PolicyAccountManager", "RenewalMonths",
             "UnderwriterAbbrev"),

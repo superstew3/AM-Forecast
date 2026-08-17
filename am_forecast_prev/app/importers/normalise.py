@@ -13,26 +13,13 @@ from decimal import Decimal, InvalidOperation
 CENT = Decimal("0.01")
 ZERO = Decimal("0.00")
 
-# Day-first throughout, because these are Australian exports. %m/%d/%Y is last
-# so an unambiguous day-first value is never read as American by accident.
-#
-# The hour-and-minute forms matter: a later WinBEAT export writes "3/08/2026
-# 8:55" with no seconds and no zero padding, which strptime will not accept
-# under "%d/%m/%Y %H:%M:%S". Every row of that file was rejected until this was
-# widened.
 _DATE_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%d %H:%M",
     "%Y-%m-%d",
     "%d/%m/%Y %H:%M:%S",
-    "%d/%m/%Y %H:%M",
     "%d/%m/%Y",
-    "%d-%m-%Y %H:%M:%S",
-    "%d-%m-%Y %H:%M",
     "%d-%m-%Y",
-    "%m/%d/%Y %H:%M:%S",
-    "%m/%d/%Y %H:%M",
     "%m/%d/%Y",
 )
 

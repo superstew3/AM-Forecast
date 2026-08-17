@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from ..importers import AcceptError, accept, prepare, reject, rollback
 from ..matching import apportion, manual_match, reject_match, run_matching
-from ..validation import ZERO_EXPECTED_EXPLANATION
+from ..validation import RENEWALS, ZERO_EXPECTED_EXPLANATION
 from .core import (
     DSN, GST_NOTE, Filters, Money, columns_of, current_user, fetch_all, fetch_one,
     filters, meta, paginate, require_admin, require_manager,
@@ -202,14 +202,8 @@ def data_quality(user=Depends(current_user)):
     """)
     return {
         "counts": counts,
-        # Counted from the data rather than asserted against a figure fixed to
-        # one export. The indicator's job is to surface these policies, not to
-        # confirm a number that stopped being true when new data arrived.
-        # The keys carry the "_policies" suffix; without it these silently
-        # returned zero and the indicator claimed to expect nothing.
-        "expected": {"zero_expected_policies": counts.get("zero_expected_policies", 0),
-                     "negative_expected_policies":
-                         counts.get("negative_expected_policies", 0)},
+        "expected": {"zero_expected_policies": RENEWALS["zero_expected_rows"],
+                     "negative_expected_policies": RENEWALS["negative_expected_rows"]},
         "notes": {"zero_expected_policies": ZERO_EXPECTED_EXPLANATION},
         "partial_periods": fetch_all("""SELECT financial_year, data_domain,
                                                coverage_status, months_present, label

@@ -143,11 +143,7 @@ def load(conn) -> dict:
                  default_growth_pct, gst_note)
             VALUES (1,%s,%s,%s,%s,%s)
             ON CONFLICT (id) DO UPDATE SET
-                -- Deliberately NOT cut_off_date. It is an operational setting an
-                -- administrator moves as each month closes, and re-running the
-                -- seed silently reverting it would make completed months look
-                -- open again — which reads as a data fault rather than a
-                -- settings one, and is very hard to spot.
+                cut_off_date = EXCLUDED.cut_off_date,
                 match_date_tolerance_days = EXCLUDED.match_date_tolerance_days,
                 default_growth_pct = EXCLUDED.default_growth_pct,
                 gst_note = EXCLUDED.gst_note
