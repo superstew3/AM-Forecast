@@ -23,6 +23,7 @@ import psycopg2
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.importers.engine import ExclusionEngine  # noqa: E402
 from app.importers.normalise import dec, parse_date  # noqa: E402
 
 ACTOR = "script:set_month_forecast_from_file"
@@ -54,22 +55,26 @@ def read_month(path: str, month: dt.date) -> list[dict]:
     return out
 
 
-def is_excluded(row: dict) -> bool:
-    """Mirror the seeded exclusion rules for renewals."""
-    manager = (row.get("PolicyAccountManager") or "").strip().upper()
-    secondary = (row.get("SecondaryAssocAbbrev") or "").strip().upper()
-    primary = (row.get("PrimaryAssocAbbrev") or "").strip().upper()
-    return ("HIGHVIEW" in manager or "CAMHIGH" in manager
-            or "CAMHIGH" in secondary or "HIGHVIEW" in secondary
-            or "HIGHVIEW" in primary)
-
-
 def apply(conn, path: str, month: dt.date, reason: str) -> dict:
-    rows = [r for r in read_month(path, month) if not is_excluded(r)]
-    if not rows:
-        raise SystemExit(f"no rows for {month:%B %Y} in {path}")
-
     with conn.cursor() as cur:
+        # The seeded rules, not a copy of them.
+        #
+        # This used to carry its own is_excluded() described as mirroring the
+        # seeded rules. It did not: the table holds seven renewals rules and the
+        # copy covered five, missing SIG HIGH on both associate fields and the
+        # Group1Abbrev rule entirely. One policy worth $640.00 passed the copy and
+        # failed the real rules, so a month pinned by this script disagreed with
+        # the same month imported normally -- silently, and in a script whose
+        # whole purpose is establishing a baseline nobody can later correct.
+        #
+        # Loading the rules from the database is the only version that cannot
+        # drift. Adding a rule through settings now takes effect here too, which
+        # was the point of putting them in a table.
+        engine = ExclusionEngine.load(cur, "renewals")
+        rows = [r for r in read_month(path, month) if engine.check(r) is None]
+        if not rows:
+            raise SystemExit(f"no rows for {month:%B %Y} in {path}")
+
         cur.execute("""SELECT date_trunc('month', cut_off_date)::date
                        FROM reporting_settings WHERE id = 1""")
         cut_month = cur.fetchone()[0]
