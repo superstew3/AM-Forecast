@@ -1,0 +1,1 @@
+- [Dual user-creation paths in am_forecast](am-forecast-user-seeding.md) — rebuild.sh's create_users.py generates random passwords, bypassing bootstrap.py's secret-based seeding; can silently break login.
