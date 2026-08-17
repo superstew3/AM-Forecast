@@ -260,6 +260,11 @@ def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"
     if f.quarter:
         sql += " AND base.financial_quarter = %(quarter)s"
         params["quarter"] = f.quarter
+    # A ranking must not list somebody excluded from rankings, so this filter
+    # stays. The fault was never here -- it was that the business totals were
+    # built from the same filtered set, so a manager kept out of a leaderboard
+    # also vanished from the income. Rankings and totals answer different
+    # questions and are now computed from different sets.
     if not include_non_ranked:
         sql += " AND m.include_in_rankings"
     rows = fetch_all(sql, params)

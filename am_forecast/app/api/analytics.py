@@ -304,12 +304,12 @@ def manager_matrix(financial_year: int = Query(2026),
                      "cells": cells,
                      "total": total if has_any and measure != "achievement" else None})
 
-    # Listed rows honour the flag; totals below never do.
-    listed = rows if include_non_ranked else [r for r in rows
-                                              if r["include_in_rankings"]]
-    excluded_from_listing = [r["canonical_manager"] for r in rows
-                             if not r["include_in_rankings"]
-                             and r["total"] is not None]
+    # Every manager is returned, each carrying include_in_rankings, and the
+    # caller decides what to rank. Filtering here made the listed rows stop
+    # summing to the grand total -- a grid whose own figures do not add up to its
+    # own total is worse than one showing an extra name, and it is the same fault
+    # in a new place: someone counted but not visible.
+    excluded_from_listing: list[str] = []
 
     column_totals = []
     for i, month in enumerate(months):
@@ -323,12 +323,13 @@ def manager_matrix(financial_year: int = Query(2026),
     return {"financial_year": financial_year, "measure": measure,
             "months": months,
             "month_status": ["completed" if m <= cut else "future" for m in months],
-            "rows": listed, "column_totals": column_totals,
+            "rows": rows, "column_totals": column_totals,
             # Everyone, listed or not, so this reconciles against the views.
             "grand_total": (sum(r["total"] for r in rows if r["total"] is not None)
                             if measure != "achievement" else None),
             "totals_include_non_ranked": True,
-            "non_ranked_in_totals_not_listed": excluded_from_listing,
+            "non_ranked_managers": [r["canonical_manager"] for r in rows
+                                   if not r["include_in_rankings"]],
             "meta": meta(financial_year), "gst_note": GST_NOTE}
 
 
