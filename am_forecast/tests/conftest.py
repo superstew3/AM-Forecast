@@ -91,7 +91,7 @@ def _discover(file_type: str) -> str:
                 d = detect(str(path))
             except Exception:
                 continue
-            if d.file_type == file_type and d.usable:
+            if d.file_type == file_type and d.importable:
                 matched.append(path)
     except Exception:
         pass
