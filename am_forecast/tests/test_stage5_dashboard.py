@@ -523,12 +523,22 @@ def test_future_months_are_not_reported_as_unavailable(client, conn, closed_mont
     """A month that has not started is 'future', never 'unavailable'.
 
     Conflating the two made an early financial year look like a broken report.
+
+    The rule is narrower than "future or unavailable never mix": month_status
+    describes the calendar (has this month started?) and cell status describes
+    the data (do we have a matched transaction for it?) -- they answer
+    different questions. A completed month with no transactions imported is
+    legitimately unavailable at the cell level. So the assertion is:
+      - a month after the cut-off must be future in both month_status and
+        every cell
+      - a month at or before the cut-off must never be future in a cell
     """
     fy = closed_month["financial_year"]
     d = client.get(f"/api/managers/Michael%20Stewart/detail?financial_year={fy}").json()
     statuses = dict(zip(d["months"], d["month_status"]))
     assert statuses[closed_month["month_iso"]] == "completed"
     later = [m for m in d["months"] if m > closed_month["month_iso"]]
+    not_later = [m for m in d["months"] if m <= closed_month["month_iso"]]
     assert later
     assert {statuses[m] for m in later} == {"future"}
 
@@ -538,6 +548,8 @@ def test_future_months_are_not_reported_as_unavailable(client, conn, closed_mont
         assert by_month[m]["status"] == "future"
         assert by_month[m]["value"] is None
         assert "not started" in by_month[m]["reason"]
+    for m in not_later:
+        assert by_month[m]["status"] != "future"
 
 def test_manager_detail_reconciles_to_the_views(client, conn, closed_month):
     """The grid totals must equal the views they are drawn from."""
