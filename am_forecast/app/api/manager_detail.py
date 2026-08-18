@@ -107,13 +107,19 @@ def _fy_months(fy: int) -> list[dt.date]:
 
 
 def _cells(months, values, cut_month, *, future_blank=True, reason=None) -> list[Cell]:
+    # A month after the cut-off is future regardless of whether a figure
+    # happens to be stored for it -- matching manager_matrix in analytics.py,
+    # which checks "started" before looking at the value. Checking the value
+    # first let an unstarted month with data already loaded (e.g. a fixture
+    # covering a full year while the cut-off is rolled back for a test) report
+    # as "actual" instead of "future".
     cells = []
     for m in months:
         v = values.get(m)
-        if v is not None:
-            cells.append(Cell(month=m, value=v, status="actual"))
-        elif future_blank and m > cut_month:
+        if future_blank and m > cut_month:
             cells.append(Cell(month=m, value=None, status="future", reason=FUTURE))
+        elif v is not None:
+            cells.append(Cell(month=m, value=v, status="actual"))
         else:
             cells.append(Cell(month=m, value=None, status="unavailable", reason=reason))
     return cells
