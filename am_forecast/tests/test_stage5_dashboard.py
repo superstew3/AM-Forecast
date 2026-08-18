@@ -287,8 +287,12 @@ def test_11_non_ranked_managers_are_in_totals_but_not_rankings(client, conn):
     # None of them may appear in rankings.
     assert not (non_ranked & ranked)
     # Any with income must still be reachable, and must count to the business.
+    # The test compares against a year-scoped endpoint, so it must scope its own
+    # expectation to the same year -- a manager who stopped trading has no rows
+    # in the current year and correctly does not appear.
     with_income = {r[0] for r in rows_of(conn, """
-        SELECT canonical_manager FROM v_actual_month GROUP BY 1""")}
+        SELECT canonical_manager FROM v_actual_month
+        WHERE financial_year = %s GROUP BY 1""", (fy,))}
     for name in non_ranked & with_income:
         assert name in everyone, name
         assert scalar(conn, """SELECT include_in_business_totals
