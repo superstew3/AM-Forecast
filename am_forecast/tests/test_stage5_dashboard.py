@@ -645,9 +645,15 @@ def test_manager_matrix_totals_match_the_views(client, conn, closed_month):
     fy = closed_month["financial_year"]
     d = client.get(f"/api/analytics/manager-matrix?financial_year={fy}"
                    "&measure=net_actual&include_non_ranked=true").json()
+    # The matrix reports months up to the cut-off and marks later ones as
+    # future, so the view must be scoped the same way -- the closed_month
+    # fixture rolls the cut-off back, and comparing a cut-off-limited total
+    # against a whole-year sum was measuring two different periods.
     assert cents(d["grand_total"]) == cents(scalar(conn, """
         SELECT COALESCE(SUM(net_actual_income), 0) FROM v_actual_month
-        WHERE financial_year = %s""", (fy,)))
+        WHERE financial_year = %s
+          AND period_month <= (SELECT date_trunc('month', cut_off_date)::date
+                               FROM reporting_settings WHERE id = 1)""", (fy,)))
     for r in d["rows"]:
         row_sum = sum(Decimal(str(c["value"])) for c in r["cells"]
                       if c["value"] is not None)
