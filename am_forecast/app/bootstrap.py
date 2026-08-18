@@ -75,8 +75,18 @@ def pending(conn) -> list[Path]:
     with conn.cursor() as cur:
         if not _table_exists(cur, "schema_migration"):
             # Nothing has been recorded. If the schema is clearly already in
-            # place, treat everything up to the tracking table as applied
-            # rather than re-running it over live data.
+            # place, treat every migration file that currently exists as
+            # applied, not just the ones up to some filename typed in here.
+            # A database with a populated sales_transaction has had ALL of
+            # its migrations run -- a hardcoded cutoff (this used to stop at
+            # "0015_auth_text_encoding.sql") means every migration added
+            # after that point is never reconciled: pending() keeps treating
+            # it as un-applied forever, and migrate() replays its raw SQL on
+            # every startup that has AUTO_MIGRATE on. That is exactly what
+            # silently dropped bonus_gst_divisor after it had already been
+            # applied by hand -- migrate() re-ran 0016 onward from scratch,
+            # including 0019, but a later migration file recreated the
+            # column on a schema state that no longer matched.
             established = _table_exists(cur, "sales_transaction")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS schema_migration (
@@ -85,10 +95,9 @@ def pending(conn) -> list[Path]:
                     applied_by varchar(120))""")
             if established:
                 for f in _files():
-                    if f.name <= "0015_auth_text_encoding.sql":
-                        cur.execute("""INSERT INTO schema_migration
-                                       (filename, applied_by) VALUES (%s, 'reconciled')
-                                       ON CONFLICT DO NOTHING""", (f.name,))
+                    cur.execute("""INSERT INTO schema_migration
+                                   (filename, applied_by) VALUES (%s, 'reconciled')
+                                   ON CONFLICT DO NOTHING""", (f.name,))
             conn.commit()
         cur.execute("SELECT filename FROM schema_migration")
         done = {r[0] for r in cur.fetchall()}

@@ -1,1 +1,8 @@
 fixtures/
+*.tar
+*.tar.gz
+schema.sql
+settings.csv
+*.png
+scratch_*.txt
+backup_*.sql
