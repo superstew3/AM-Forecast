@@ -6,3 +6,7 @@ settings.csv
 *.png
 scratch_*.txt
 backup_*.sql
+am_forecast_prev_16/
+attached_assets/
+!web/public/*.png
+!am_forecast/web/public/*.png
