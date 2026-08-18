@@ -375,19 +375,23 @@ def sum_column(path, column, cur=None, conn=None, source_type="sales", positive_
             cur.close()
 
 
-def is_excluded_renewal(row) -> bool:
-    """Whether a renewal row is excluded, mirroring the seeded rules.
+# This used to be is_excluded_renewal(row): a hand-written check comparing
+# PolicyAccountManager, SecondaryAssocAbbrev and PrimaryAssocAbbrev against the
+# literals "HIGHVIEW" and "CAMHIGH". It was the fourth hand-written copy of the
+# exclusion rules found in this codebase (after the app's own former inline
+# check, scripts/set_month_forecast_from_file.py's old copy, and sum_column's
+# former "HIGHVIEW" == PrimaryAssocCode check above) -- and it was wrong in yet
+# another way of its own: right fields for renewals, but still a fixed set of
+# literals frozen at the moment it was written, invisible to a rule added or
+# changed in the exclusion_rule table afterwards. Four independent copies of
+# one rule set is exactly how a real exclusion goes unnoticed: each copy looks
+# reasonable on its own and agrees with none of the others. ExclusionEngine,
+# loaded from the table, is the only implementation; nothing here should
+# reimplement it again.
+def renewal_exclusion_engine(cur):
+    from app.importers.engine import ExclusionEngine
 
-    Exclusion is on the account manager and the secondary associate, not the
-    primary associate — a distinction that matters, because the primary
-    associate is now the income column.
-    """
-    manager = (row.get("PolicyAccountManager") or "").strip().upper()
-    secondary = (row.get("SecondaryAssocAbbrev") or "").strip().upper()
-    primary = (row.get("PrimaryAssocAbbrev") or "").strip().upper()
-    return ("HIGHVIEW" in manager or "CAMHIGH" in manager
-            or "CAMHIGH" in secondary or "HIGHVIEW" in secondary
-            or "HIGHVIEW" in primary)
+    return ExclusionEngine.load(cur, "renewals")
 
 
 def _renewal_income(row):
@@ -395,15 +399,28 @@ def _renewal_income(row):
     return _dec(row.get("PrimaryAssocCommSum")) + _dec(row.get("PrimaryAssocCommTaxSum"))
 
 
-def sum_renewal_income(path, exclude_highview=True):
+def sum_renewal_income(path, cur=None, conn=None, exclude_highview=True):
     """SIG expected income: the associate share, GST inclusive."""
     from decimal import Decimal
-    total = Decimal(0)
-    for r in read_rows(path):
-        if exclude_highview and is_excluded_renewal(r):
-            continue
-        total += _dec(r.get("PrimaryAssocCommSum")) + _dec(r.get("PrimaryAssocCommTaxSum"))
-    return total
+
+    owns_cursor = cur is None
+    if cur is None:
+        if conn is None:
+            raise TypeError(
+                "sum_renewal_income needs a database connection or cursor to "
+                "load exclusion rules from the exclusion_rule table")
+        cur = conn.cursor()
+    try:
+        engine = renewal_exclusion_engine(cur) if exclude_highview else None
+        total = Decimal(0)
+        for r in read_rows(path):
+            if engine is not None and engine.check(r) is not None:
+                continue
+            total += _dec(r.get("PrimaryAssocCommSum")) + _dec(r.get("PrimaryAssocCommTaxSum"))
+        return total
+    finally:
+        if owns_cursor:
+            cur.close()
 
 
 # Batches a longer-lived fixture is still using. The autouse cleanup runs after

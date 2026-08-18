@@ -11,8 +11,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from conftest import (RENEWALS_FILE, SALES_FILE, _renewal_income, is_excluded_renewal, read_rows,
-                      source_row_count,
+from conftest import (RENEWALS_FILE, SALES_FILE, _renewal_income, read_rows,
+                      renewal_exclusion_engine, source_row_count,
                       sum_column, sum_renewal_income)
 
 from app.importers import (
@@ -326,15 +326,16 @@ def test_renewals_preview_reconciles(conn):
     s = prepare(conn, RENEWALS_FILE, "pytest")
     try:
         assert s.source_rows == source_row_count(RENEWALS_FILE)
+        engine = renewal_exclusion_engine(conn.cursor())
         assert s.excluded_rows == sum(
-            1 for r in read_rows(RENEWALS_FILE) if is_excluded_renewal(r))
-        expected = sum_renewal_income(RENEWALS_FILE)
+            1 for r in read_rows(RENEWALS_FILE) if engine.check(r) is not None)
+        expected = sum_renewal_income(RENEWALS_FILE, conn=conn)
         assert abs(s.raw_expected_income - expected) <= CENT
         # Contribution floors negatives at zero, so it can only be higher.
         assert s.forecast_contribution >= s.raw_expected_income
         assert s.exceptions_by_type.get("negative_expected", 0) == sum(
             1 for r in read_rows(RENEWALS_FILE)
-            if not is_excluded_renewal(r)
+            if engine.check(r) is None
             and _renewal_income(r) < 0)
         assert s.exceptions_by_type.get("overdue_pending") == 1
     finally:
