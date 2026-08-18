@@ -1,1 +1,2 @@
 - [Dual user-creation paths in am_forecast](am-forecast-user-seeding.md) — rebuild.sh's create_users.py generates random passwords, bypassing bootstrap.py's secret-based seeding; can silently break login.
+- [git push auth workaround](git-push-auth-workaround.md) — plain `git push` 401s here even with a valid token; use explicit Authorization header + bypass global git config.
