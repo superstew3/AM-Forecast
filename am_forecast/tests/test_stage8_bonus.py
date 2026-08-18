@@ -1,9 +1,16 @@
 """Bonus calculation and tracker.
 
     Budget Target      = Expected Income x (1 + Growth %)
-    Base Bonus         = (Budget Target - Expected Income) / divisor
-    Above-Target Bonus = (Actual Income - Budget Target) x rate
+    Base Bonus         = (Budget Target - Expected Income) / divisor / GST
+    Above-Target Bonus = (Actual Income - Budget Target) x rate / GST
     Total              = 0 below target, otherwise Base + Above-Target
+
+Bonus is the one GST EXCLUSIVE figure in the system; everything else it is
+compared against is GST inclusive. The divisors are read from
+reporting_settings rather than written into the assertions -- these tests
+hard-coded "/ 3" and broke the moment the scheme changed, which is the same
+fault that put four hand-written copies of the exclusion rules in this
+codebase.
 """
 from __future__ import annotations
 
@@ -17,6 +24,21 @@ CENT = Decimal("0.01")
 
 def cents(v):
     return Decimal(str(v)).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def scheme(conn):
+    """The live bonus scheme. Read, never restated."""
+    with conn.cursor() as cur:
+        cur.execute("""SELECT bonus_base_divisor, bonus_above_target_rate,
+                              bonus_gst_divisor
+                       FROM reporting_settings WHERE id = 1""")
+        return cur.fetchone()
+
+
+def base_bonus(target, expected, conn):
+    """Base bonus as the application computes it, GST excluded."""
+    divisor, _rate, gst = scheme(conn)
+    return cents((Decimal(str(target)) - Decimal(str(expected))) / divisor / gst)
 
 
 @pytest.fixture(scope="module")
@@ -70,7 +92,7 @@ def test_base_bonus_is_a_third_of_the_growth_target(conn):
     for expected, target, base in rows(conn, """
             SELECT expected_income, budget_target, bonus_at_target
             FROM v_bonus_quarter WHERE financial_year = 2026"""):
-        assert cents(base) == cents((target - expected) / 3)
+        assert cents(base) == base_bonus(target, expected, conn)
 
 
 def test_no_bonus_below_target(conn):
@@ -92,7 +114,7 @@ def test_bonus_above_target_is_base_plus_twenty_percent(conn):
         FROM v_bonus_quarter
         WHERE financial_year = 2026 AND quarter_started AND target_reached""")
     for _, expected, target, actual, base, above, total in achieved:
-        assert cents(base) == cents((target - expected) / 3)
+        assert cents(base) == base_bonus(target, expected, conn)
         assert cents(above) == cents((actual - target) * Decimal("0.20"))
         assert cents(total) == cents(base + above)
 
@@ -123,7 +145,7 @@ def test_bonus_appears_once_a_target_is_cleared(admin, conn):
                           AND financial_year=2026 AND financial_quarter=1""")[0]
     expected, target, actual, base, above, total, reached = row
     if reached:
-        assert cents(base) == cents((target - expected) / 3)
+        assert cents(base) == base_bonus(target, expected, conn)
         assert cents(above) == cents((actual - target) * Decimal("0.20"))
         assert cents(total) == cents(base + above)
         assert total > 0
@@ -232,7 +254,7 @@ def test_scheme_can_be_changed_by_an_administrator(admin, conn):
           AND financial_year=2026 AND financial_quarter=1""")[0]
     # A third became a half. Compared against the formula rather than against
     # the previous figure, which would compound two roundings.
-    assert cents(after) == cents((target - expected) / 2)
+    assert cents(after) == base_bonus(target, expected, conn)
     assert after > before
     assert scalar(conn, """SELECT reason FROM budget_audit
                            WHERE action='set_bonus_scheme'
