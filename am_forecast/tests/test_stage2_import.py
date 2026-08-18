@@ -135,8 +135,8 @@ def test_preview_of_fresh_sales_file_reconciles(conn, tmp_path):
                           WHERE id = (SELECT MIN(id) FROM upload_batch
                                       WHERE file_type='sales' AND status='accepted')""")
     # The preview must report what the file actually contains.
-    assert abs(row - sum_column(SALES_FILE, "PrimaryAssocAmount",
-                                positive_only=True)) <= CENT
+    assert abs(row - sum_column(SALES_FILE, "PrimaryAssocAmount", conn=conn,
+                                source_type="sales", positive_only=True)) <= CENT
 
 
 def test_reject_discards_staging_and_touches_nothing(conn):

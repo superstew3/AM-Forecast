@@ -331,23 +331,48 @@ def _dec(value):
         return Decimal(0)
 
 
-def sum_column(path, column, positive_only=False, exclude_highview=True):
+def sum_column(path, column, cur=None, conn=None, source_type="sales", positive_only=False):
     """Total a column straight from the source file.
 
     Lets a test assert that the importer reported what the file contained,
     which is the property worth checking, rather than a figure that belongs to
     one particular export.
+
+    This used to carry its own hand-written exclusion check that compared
+    PrimaryAssocCode to the literal "HIGHVIEW" -- one field matched against one
+    literal by equality. The real rules live in the exclusion_rule table and
+    span several rules across four fields, some matching on "contains" rather
+    than exact equality. The hand-copy under-excluded by roughly a million
+    dollars and made a correct importer look wrong. This was the third copy of
+    these rules found in the codebase (see scripts/set_month_forecast_from_file.py
+    for the second); ExclusionEngine, loaded from the table, is the only
+    implementation and cannot drift from it.
     """
     from decimal import Decimal
-    total = Decimal(0)
-    for r in read_rows(path):
-        if exclude_highview and (r.get("PrimaryAssocCode") or "").strip().upper() == "HIGHVIEW":
-            continue
-        value = _dec(r.get(column))
-        if positive_only:
-            value = max(value, Decimal(0))
-        total += value
-    return total
+
+    from app.importers.engine import ExclusionEngine
+
+    owns_cursor = cur is None
+    if cur is None:
+        if conn is None:
+            raise TypeError(
+                "sum_column needs a database connection or cursor to load "
+                "exclusion rules from the exclusion_rule table")
+        cur = conn.cursor()
+    try:
+        engine = ExclusionEngine.load(cur, source_type)
+        total = Decimal(0)
+        for r in read_rows(path):
+            if engine.check(r) is not None:
+                continue
+            value = _dec(r.get(column))
+            if positive_only:
+                value = max(value, Decimal(0))
+            total += value
+        return total
+    finally:
+        if owns_cursor:
+            cur.close()
 
 
 def is_excluded_renewal(row) -> bool:
