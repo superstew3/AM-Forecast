@@ -32,7 +32,10 @@ export function Value({ m, kind = "money", digits }: {
 export function Metric({ label, m, kind = "money", hint, emphasis, ratio }: {
   label: string;
   m: Money | Ratio | null | undefined;
-  kind?: "money" | "percent";
+  // "count" was already supported by Value but not exposed here, so a count had
+  // to be passed as money and rendered as "$13.00" -- a plain number formatted
+  // as currency, sitting in a row of real money on the bonus page.
+  kind?: "money" | "percent" | "count";
   hint?: string;
   emphasis?: boolean;
   ratio?: Ratio;

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, money, percent } from "../lib/api";
 import { YearOptions, usePeriods } from "../lib/usePeriods";
 import { BudgetGauge, ChangeBars, MonthlyBars } from "../components/charts";
-import { DataTable, Failed, GstBanner, Loading, Metric, Notes, Panel } from "../components/ui";
+import { DataTable, Failed, GstBanner, Loading, Metric, Notes, Panel, Value } from "../components/ui";
 
 const STATUS_LABEL: Record<string, string> = {
   earned: "Earned", missed: "Missed", "on track": "On track",
@@ -57,10 +57,21 @@ export default function Bonus() {
         projection at current pace reported separately. Projections are not money.
       </div>
 
-      <Panel title="Position across the business">
-        <div className="metric-grid">
-          <Metric label="Earned to date"
-                  m={{ value: d.totals.earned_bonus, available: true }} emphasis
+      {/* Three figures, not seven.
+          The seven-metric row mixed money with a headcount, earned with
+          projected, and to-date with full-year, all at the same size and weight
+          -- so the eye could not tell which one answered "what has been earned".
+          Two of them (total actual income, total budget target) belong to the
+          business page and were repeated here.
+
+          What is left is the question the page exists to answer -- what is
+          payable now -- with the two forward-looking figures beside it, clearly
+          separated and clearly labelled as not money. */}
+      <Panel title="What is payable"
+             subtitle={d.scheme.gst_note}>
+        <div className="metric-grid metric-grid-3">
+          <Metric label="Earned to date" emphasis
+                  m={{ value: d.totals.earned_bonus, available: true }}
                   hint={d.column_scope.earned_bonus} />
           <Metric label="Projected — quarters under way"
                   m={{ value: d.totals.projected_bonus, available: true }}
@@ -68,15 +79,13 @@ export default function Bonus() {
           <Metric label="Full year at target"
                   m={{ value: d.totals.bonus_at_target, available: true }}
                   hint={d.column_scope.bonus_at_target} />
-          <Metric label="Full year outlook"
-                  m={{ value: d.totals.full_year_outlook, available: true }}
-                  hint={d.column_scope.full_year_outlook} />
-          <Metric label="Total actual income"
-                  m={{ value: d.totals.actual_income, available: true }} />
-          <Metric label="Total budget target"
-                  m={{ value: d.totals.budget_target, available: true }} />
-          <Metric label="Managers in scheme"
-                  m={{ value: d.totals.managers, available: true }} kind="money" />
+        </div>
+        <div className="metric-footnote">
+          {d.totals.managers} managers in the scheme.
+          {" "}Full-year outlook <Value m={{ value: d.totals.full_year_outlook,
+                                             available: true }} />.
+          {" "}Income and targets are on the{" "}
+          <a href="/business">business page</a>.
         </div>
       </Panel>
 

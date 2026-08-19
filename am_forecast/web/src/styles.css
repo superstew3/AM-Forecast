@@ -129,6 +129,20 @@ h1 .fy { color: var(--ink-faint); font-weight: 400; font-size: var(--t-base); ma
 .metric-label { font-size: var(--t-xs); color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
 .metric-value { font-size: var(--t-xl); font-weight: 600; margin-top: 5px; font-variant-numeric: tabular-nums; }
 .metric-sub { font-size: var(--t-xs); color: var(--ink-soft); margin-top: 4px; }
+
+/* Three abreast and no auto-fit, so the primary figure keeps its position as
+   the window narrows. With auto-fit the cards reflowed and "Earned to date"
+   could end up mid-row, which is the one figure that must be found first. */
+.metric-grid-3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 760px) { .metric-grid-3 { grid-template-columns: 1fr; } }
+
+/* Secondary context, deliberately smaller than the cards above it: a headcount
+   and a cross-reference are not results and should not compete with money. */
+.metric-footnote {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
+  font-size: var(--t-xs); color: var(--ink-soft);
+}
+.metric-footnote .val { font-weight: 600; color: var(--ink); }
 .tone-good .metric-sub { color: var(--good); }
 .tone-watch .metric-sub { color: var(--watch); }
 .tone-bad .metric-sub { color: var(--bad); }
