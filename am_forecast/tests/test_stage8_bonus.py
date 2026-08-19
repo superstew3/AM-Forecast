@@ -235,9 +235,23 @@ def test_scheme_is_reported_with_the_formula(client):
     # "20.0000%" reaching the screen.
     assert "3.00" not in s["description"]
     assert "20.0000" not in s["description"]
-    assert "divided by 3." in s["description"]
+    assert "divided by 3" in s["description"]
     assert "20%" in s["description"]
-    assert len(s["formula"]) == 4
+
+    # The GST divisor has to be stated, not just applied. Somebody checking a
+    # payment by hand from the income and target figures -- which are GST
+    # inclusive -- lands about 9% high, and with nothing on the page to explain
+    # the difference the reasonable conclusion is that the app is wrong.
+    assert s["is_gst_exclusive"] is True
+    assert Decimal(str(s["gst_divisor"])) == Decimal("1.1")
+    assert "GST" in s["gst_note"] and "1.1" in s["gst_note"]
+    assert any("1.1" in line for line in s["formula"]), \
+        "the formula must show the GST divisor, not hide it"
+    assert any("GST exclusive" in line for line in s["formula"])
+
+    # Length is not asserted: pinning it meant a line could not be added to the
+    # explanation without a test failing, which is backwards.
+    assert len(s["formula"]) >= 4
 
 
 def test_scheme_can_be_changed_by_an_administrator(admin, conn):

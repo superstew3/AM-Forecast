@@ -93,12 +93,23 @@ def test_detects_renewals_report():
 
 
 def test_detection_warns_about_component_fee_fields():
-    """The fields that must never be summed are called out in the preview."""
+    """The fields that must never be summed are called out in the preview.
+
+    Asserts that each field is named, not that the explanation uses any
+    particular phrase. It previously required the words "double counts", which
+    was the wording from when income was Commission + Fees. Income is now the
+    primary associate share, so Fees contributes nothing and the double count it
+    warned about cannot happen -- the reason had to change, and a test pinned to
+    the old sentence made correcting it look like a regression.
+    """
     messages = " ".join(detect(SALES_FILE).messages)
-    assert "SpecialFees" in messages and "double counts" in messages
+    for f in ("SpecialFees", "Fee"):
+        assert f in messages, f
+    assert "audit" in messages, "the reason should say what the field is kept for"
+
     messages = " ".join(detect(RENEWALS_FILE).messages)
     for f in ("Admin", "Special"):
-        assert f in messages
+        assert f in messages, f
 
 
 def test_detection_rejects_unrelated_file(tmp_path):

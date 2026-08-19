@@ -42,24 +42,43 @@ def _dec(v) -> Decimal:
 
 
 def _scheme() -> dict:
-    r = fetch_one("""SELECT bonus_base_divisor, bonus_above_target_rate
+    r = fetch_one("""SELECT bonus_base_divisor, bonus_above_target_rate,
+                            bonus_gst_divisor
                      FROM reporting_settings WHERE id = 1""")
     # Decimal keeps its scale through :g, so 3 prints as "3.00" and 0.2 as
     # "20.0000%". Cast for display only; the stored values stay exact.
     divisor = float(r["bonus_base_divisor"])
     rate_pct = float(r["bonus_above_target_rate"]) * 100
+    gst = float(r["bonus_gst_divisor"])
+    gst_pct = (gst - 1) * 100
+
+    # Every figure is read from reporting_settings, including the GST divisor.
+    # This block previously wrote the formula out with the divisor inline and no
+    # mention of GST, so anyone checking a payment by hand arrived at a figure
+    # about 9% higher than the app pays and reasonably concluded the app was
+    # wrong. An explainer that disagrees with the calculation is worse than none.
     return {
         "base_divisor": r["bonus_base_divisor"],
         "above_target_rate": r["bonus_above_target_rate"],
+        "gst_divisor": r["bonus_gst_divisor"],
+        "is_gst_exclusive": True,
+        "gst_note": (
+            f"Bonus payments are GST EXCLUSIVE: the calculated amount is divided "
+            f"by {gst:g} to remove {gst_pct:g}% GST. Every other figure in this "
+            f"system is GST inclusive, including the income and targets above. A "
+            f"bonus will therefore look about {(1 - 1 / gst) * 100:.0f}% lower "
+            f"than the same sum worked out from those figures by hand."),
         "description": (
             f"Bonus applies only once the quarter's Budget Target is reached. "
             f"Base bonus is the monetary growth target divided by {divisor:g}. "
-            f"Income above the target earns a further {rate_pct:g}%."),
+            f"Income above the target earns a further {rate_pct:g}%. Both are "
+            f"then divided by {gst:g} because the payment excludes GST."),
         "formula": [
             "Budget Target = Expected Income x (1 + Growth %)",
-            f"Base Bonus = (Budget Target - Expected Income) / {divisor:g}",
-            f"Above-Target Bonus = (Actual Income - Budget Target) x {rate_pct:g}%",
+            f"Base Bonus = (Budget Target - Expected Income) / {divisor:g} / {gst:g}",
+            f"Above-Target Bonus = (Actual Income - Budget Target) x {rate_pct:g}% / {gst:g}",
             "Total = 0 below target, otherwise Base + Above-Target",
+            "All bonus figures are GST exclusive.",
         ],
     }
 

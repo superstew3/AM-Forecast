@@ -66,16 +66,31 @@ SIGNATURES = (SALES, RENEWALS, LEGACY)
 
 # Fields that must never be summed into income, kept here so the reason travels
 # with the code rather than living only in a document.
+# Columns retained for audit that must never be added into a reported figure.
+#
+# The reasons were written when income was Commission + Fees, and warned about a
+# double count. Income is now the primary associate share, so Fees and its
+# components take no part in the calculation at all -- the warning described a
+# mistake that could no longer be made, which is its own kind of misleading.
 NEVER_SUM = {
     "sales": {
-        "SpecialFees": "component of Fees; adding it double counts",
-        "Fee": "component of Fees; adding it double counts",
+        "SpecialFees": "component of Fees, and Fees no longer contributes to "
+                       "reported income; retained for audit only",
+        "Fee": "component of Fees, and Fees no longer contributes to reported "
+               "income; retained for audit only",
+        "Commission": "retained for audit and WinBEAT reconciliation; reported "
+                      "income is the primary associate share, not commission",
+        "Fees": "retained for audit and WinBEAT reconciliation; reported income "
+                "is the primary associate share",
     },
     "renewals": {
-        "Admin": "component of Fee; adding it double counts",
-        "AdminTax": "component of FeeTax; adding it double counts",
-        "Special": "component of Fee; adding it double counts",
-        "SpecialTax": "component of FeeTax; adding it double counts",
+        "Admin": "component of Fee, and Fee no longer contributes to expected "
+                 "income; retained for audit only",
+        "AdminTax": "component of FeeTax; retained for audit only",
+        "Special": "component of Fee; retained for audit only",
+        "SpecialTax": "component of FeeTax; retained for audit only",
+        "Comm": "retained for audit; expected income is the primary associate "
+                "commission plus its tax",
     },
 }
 
