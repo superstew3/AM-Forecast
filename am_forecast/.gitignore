@@ -11,3 +11,5 @@ am_forecast_prev/
 attached_assets/
 !web/public/*.png
 !am_forecast/web/public/*.png
+web/src/**/*.js
+web/dist/

@@ -9,6 +9,7 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "skipLibCheck": true,
+    "noEmit": true,
     "types": ["vitest/globals"]
   },
   "include": ["src"]
