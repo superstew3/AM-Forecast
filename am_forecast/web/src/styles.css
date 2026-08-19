@@ -653,3 +653,56 @@ button.primary:hover:not(:disabled) { background: #17405e; }
    than the page-level set and must not be mistaken for them. */
 .quarter-tabs-sm .quarter-tab { padding: 3px 10px; font-size: var(--t-xs); }
 .manager-months .months-head { flex-wrap: wrap; }
+
+/* --- Budget page -------------------------------------------------------- */
+
+/* The business-wide rate gets its own block. It used to be one option in a
+   dropdown beside "Manager", which is a thin line between moving one person's
+   target and moving everybody's. */
+.global-rate {
+  display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap;
+}
+.global-rate-figure .metric-value { font-size: var(--t-xl); font-weight: 600; }
+
+.rate-edit {
+  display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; background: var(--accent-soft);
+  border: 1px solid #c6d6e3; border-radius: 6px;
+}
+.rate-edit-standalone { margin-top: 12px; }
+.rate-edit-who { font-weight: 600; align-self: center; }
+.rate-edit label { display: flex; flex-direction: column; gap: 3px; font-size: var(--t-xs); }
+.rate-edit .grow { flex: 1 1 240px; }
+.rate-edit input {
+  border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px;
+  font-size: var(--t-sm);
+}
+.btn-primary {
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  border-radius: 4px; padding: 6px 14px; font-size: var(--t-sm); cursor: pointer;
+}
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* The rate is a button so it is obviously the thing you change. A number that
+   silently becomes editable on click is a number nobody clicks. */
+.rate-button {
+  background: none; border: 1px dashed var(--line); border-radius: 4px;
+  padding: 2px 8px; font: inherit; color: var(--ink); cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.rate-button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.rate-input { width: 84px; border: 1px solid var(--accent); border-radius: 4px; padding: 3px 6px; }
+
+.chip-global { background: #f2f5f7; color: var(--ink-soft); }
+.chip-manager, .chip-manager_quarter { background: var(--accent-soft); color: var(--accent); border-color: #c6d6e3; }
+.chip-mixed { background: #fdf3e2; color: #8a5a10; border-color: #f0dcb6; }
+/* A locked month has already been measured against, so a rate change cannot
+   move it. Saying so on the row prevents the "I changed it and nothing
+   happened" conversation. */
+.chip-locked { background: #fdecec; color: #9a2b2b; border-color: #f2c9c9; }
+
+.link-button {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  font: inherit; text-decoration: underline; padding: 0;
+}
+.error-note { color: #9a2b2b; font-size: var(--t-sm); margin-top: 8px; }
