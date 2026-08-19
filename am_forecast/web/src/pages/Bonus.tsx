@@ -102,9 +102,9 @@ export default function Bonus() {
     return qs.length ? Math.max(...qs) : 1;
   }, [all.data]);
 
-  if (all.isLoading) return <Loading what="the bonus tracker" />;
   if (all.isError) return <Failed error={all.error} retry={() => all.refetch()} />;
-  const d = all.data!;
+  if (!all.data) return <Loading what="the bonus tracker" />;
+  const d = all.data;
 
   const quarter = quarterPick ?? liveQuarter;
   const isYtd = quarter === 0;
