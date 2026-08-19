@@ -580,3 +580,66 @@ button.primary:hover:not(:disabled) { background: #17405e; }
 .signout { width: 100%; background: transparent; border: 1px solid #2b3d4d;
   color: #a8b6c4; font-size: var(--t-xs); padding: 6px; }
 .signout:hover { background: #17242f; color: #fff; }
+
+
+/* --- Bonus tracker ------------------------------------------------------ */
+
+/* The quarter is the frame for everything below it, so it sits above the
+   figures rather than inside a panel among them. */
+.quarter-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; margin: 14px 0 10px; flex-wrap: wrap;
+}
+.quarter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.quarter-tab {
+  border: 1px solid var(--line); background: #fff; border-radius: 999px;
+  padding: 6px 14px; font-size: var(--t-sm); cursor: pointer; color: var(--ink);
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.quarter-tab:hover { border-color: #c6d6e3; background: var(--accent-soft); }
+.quarter-tab.is-active {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+}
+/* The live quarter stays findable even when another is selected -- the usual
+   reason for looking at a past quarter is to compare it with this one. */
+.live-dot {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  background: var(--good); color: #fff; border-radius: 3px; padding: 1px 5px;
+}
+.quarter-tab.is-active .live-dot { background: #fff; color: var(--accent); }
+.quarter-progress { font-size: var(--t-sm); color: var(--ink-soft); }
+
+.metric-grid-4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 1000px) { .metric-grid-4 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px)  { .metric-grid-4 { grid-template-columns: 1fr; } }
+
+/* Standing, as a word rather than a number. A percentage invites arithmetic;
+   this is meant to be read at a glance down a column. */
+.pill {
+  display: inline-block; border-radius: 999px; padding: 2px 10px;
+  font-size: var(--t-xs); font-weight: 600; text-transform: capitalize;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.pill-good { background: #e7f4ec; color: #1d6b3f; border-color: #bfe0cc; }
+.pill-warn { background: #fdf3e2; color: #8a5a10; border-color: #f0dcb6; }
+.pill-bad  { background: #fdecec; color: #9a2b2b; border-color: #f2c9c9; }
+.pill-none { background: #f2f5f7; color: var(--ink-soft); border-color: var(--line); }
+
+.manager-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.chip {
+  border: 1px solid var(--line); background: #fff; border-radius: 999px;
+  padding: 5px 12px; font-size: var(--t-sm); cursor: pointer; color: var(--ink);
+}
+.chip:hover { border-color: #c6d6e3; background: var(--accent-soft); }
+.chip.is-active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.manager-months .months-head {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+}
+.manager-months .months-head h3 { margin: 0; font-size: var(--t-md); }
+/* A month that has not happened is dimmed rather than hidden: seeing what is
+   still to come is half the point of looking. */
+.row-future { opacity: 0.55; }
+.total-bonus { font-weight: 700; }
+.months-note { font-size: var(--t-xs); color: var(--ink-soft); margin-top: 10px; }
+.empty { font-size: var(--t-sm); color: var(--ink-soft); padding: 8px 0; }

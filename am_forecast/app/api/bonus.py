@@ -103,6 +103,19 @@ class BonusQuarter(BaseModel):
     target_reached: bool | None = None
     income_still_required: Decimal | None = None
 
+    # Pace: the budget for the months that have actually elapsed, and how the
+    # income compares with it.
+    #
+    # Without these the only comparison available is actual against the WHOLE
+    # quarter's target, which one month into three reports every manager as
+    # catastrophically behind. On the live book that made three managers who were
+    # ahead of pace read as 43% to 57% under -- the exact fault the reporting
+    # rules warn about, sitting on the headline table.
+    budget_to_date: Decimal | None = None
+    pace_variance: Decimal | None = None
+    pace_achievement: Decimal | None = None
+    pace: str | None = None
+
     bonus_at_target: Decimal | None = None
     base_bonus: Decimal | None = None
     above_target_bonus: Decimal | None = None
@@ -112,12 +125,44 @@ class BonusQuarter(BaseModel):
     status: str = "not started"
 
 
+def _pace(r: dict) -> tuple[Decimal | None, Decimal | None, str | None]:
+    """Income against the budget for the months elapsed, not the whole quarter.
+
+    Returns the variance, the ratio, and a word for it. A quarter that has not
+    started has no pace: it is absent rather than zero.
+    """
+    if not r["quarter_started"]:
+        return None, None, None
+    to_date = _dec(r["budget_to_date"])
+    actual = _dec(r["actual_income"])
+    if to_date <= 0:
+        return None, None, None
+    ratio = actual / to_date
+    if ratio >= Decimal("1"):
+        word = "ahead"
+    elif ratio >= Decimal("0.9"):
+        word = "on pace"
+    elif ratio >= Decimal("0.6"):
+        word = "behind"
+    else:
+        word = "well behind"
+    return actual - to_date, ratio, word
+
+
 def _status(r: dict) -> str:
+    """Where the quarter stands, in words meant for the person being measured.
+
+    A finished quarter has a result. A running one has a direction, judged
+    against the months elapsed rather than the whole quarter -- "behind" should
+    mean behind the pace needed, not behind a target that still has two months
+    to run.
+    """
     if not r["quarter_started"]:
         return "not started"
     if r["quarter_complete"]:
-        return "earned" if r["target_reached"] else "missed"
-    return "on track" if (r["projected_bonus"] or 0) > 0 else "behind"
+        return "bonus earned" if r["target_reached"] else "no bonus"
+    _v, _r, word = _pace(r)
+    return word or "in progress"
 
 
 def _quarter_rows(financial_year: int, manager: str | None = None) -> list[dict]:
@@ -145,6 +190,7 @@ def bonus(financial_year: int = Query(2026), manager: str | None = None,
         **{k: r[k] for k in BonusQuarter.model_fields if k in r
            and k not in ("quarter_label", "status")},
         quarter_label=f"Q{r['financial_quarter']} {QUARTER_MONTHS[r['financial_quarter']]}",
+        **dict(zip(("pace_variance", "pace_achievement", "pace"), _pace(r))),
         status=_status(r)).model_dump() for r in rows]
 
     by_manager: dict[str, dict] = {}
@@ -266,6 +312,7 @@ def bonus_for_manager(manager: str, financial_year: int = Query(2026),
         **{k: r[k] for k in BonusQuarter.model_fields if k in r
            and k not in ("quarter_label", "status")},
         quarter_label=f"Q{r['financial_quarter']} {QUARTER_MONTHS[r['financial_quarter']]}",
+        **dict(zip(("pace_variance", "pace_achievement", "pace"), _pace(r))),
         status=_status(r)).model_dump() for r in rows]
 
     months = fetch_all("""

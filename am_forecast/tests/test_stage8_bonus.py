@@ -193,15 +193,48 @@ def test_projection_scales_the_elapsed_pace(conn):
         assert cents(projected) == cents(actual * Decimal(in_quarter) / Decimal(elapsed))
 
 
+# The words a quarter can be in. A finished quarter has a result; a running one
+# has a direction, judged against the months elapsed rather than the whole
+# quarter -- "behind" has to mean behind the pace needed, not behind a target
+# with two months still to run, or every manager reads as failing in July.
+FINISHED = {"bonus earned", "no bonus"}
+RUNNING = {"ahead", "on pace", "behind", "well behind", "in progress"}
+
+
 def test_status_reflects_the_position(client):
     d = client.get("/api/bonus?financial_year=2026").json()
     for q in d["quarters"]:
         if not q["quarter_started"]:
-            assert q["status"] == "not started"
+            assert q["status"] == "not started", q
         elif q["quarter_complete"]:
-            assert q["status"] in ("earned", "missed")
+            assert q["status"] in FINISHED, q
         else:
-            assert q["status"] in ("on track", "behind")
+            assert q["status"] in RUNNING, q
+
+
+def test_pace_is_measured_against_the_months_elapsed(client):
+    """The running quarter compares like with like.
+
+    Comparing income against the whole quarter's target one month into three
+    reported every manager as catastrophically behind -- on the live book three
+    who were ahead of pace read as 43% to 57% under. pace_achievement must use
+    the budget for the months elapsed, so the figure means something in week two.
+    """
+    d = client.get("/api/bonus?financial_year=2026").json()
+    running = [q for q in d["quarters"]
+               if q["quarter_started"] and not q["quarter_complete"]
+               and q["pace_achievement"] is not None]
+    if not running:
+        pytest.skip("no quarter is part-way through in this dataset")
+
+    for q in running:
+        to_date = Decimal(str(q["budget_to_date"]))
+        assert to_date <= Decimal(str(q["budget_target"])), \
+            "the target for months elapsed cannot exceed the whole quarter's"
+        expected = Decimal(str(q["actual_income"])) / to_date
+        assert abs(Decimal(str(q["pace_achievement"])) - expected) < Decimal("0.0001"), q
+        assert Decimal(str(q["pace_variance"])) == \
+            Decimal(str(q["actual_income"])) - to_date
 
 
 # --- monthly indicative --------------------------------------------------------
