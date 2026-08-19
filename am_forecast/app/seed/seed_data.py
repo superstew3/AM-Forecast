@@ -25,9 +25,11 @@ REPORTING_MANAGERS = [
     ("Strata Insurance", "active", True,  True, 110, "Reported separately by instruction"),
     ("Marine Trades",    "active", True,  True, 120, "Scheme book, reported separately"),
     ("Dinghy Scheme",    "active", True,  True, 130, "Scheme book, reported separately"),
-    ("Cameron Stewart",  "active", True,  True, 140,
+    # Actual income and forecast count towards business totals; excluded from
+    # rankings to match Anastasia K's treatment.
+    ("Cameron Stewart",  "active", False,  True, 140,
      "Non-Highview records only. Highview-associated Cameron Stewart rows are excluded "
-     "by rule, not by manager name."),
+     "by rule, not by manager name. Out of rankings by instruction."),
     # Actual income counts towards business totals; no pending book, so no
     # forecast and no budget. Out of rankings until an administrator maps her.
     ("Anastasia K", "legacy_unmapped", False, True, 900,
