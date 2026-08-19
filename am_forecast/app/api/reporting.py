@@ -433,7 +433,27 @@ def return_income(f: Filters = Depends(filters), user=Depends(current_user)):
                COALESCE(SUM(absolute_return_income),0) AS absolute,
                COALESCE(SUM(transaction_rows),0) AS rows
         FROM v_return_income_analysis{where}""", params)
-    return {"items": rows, "total": total, "meta": meta(f.financial_year),
+
+    # By manager as well as by class. Return income was only ever grouped by
+    # classification, which answers "what is being returned" but not "whose book
+    # it is coming out of" -- and the second question is the one that leads
+    # somewhere, because a concentration in one book is a pattern worth asking
+    # about rather than a number to note.
+    by_manager = fetch_all(f"""
+        SELECT canonical_manager,
+               SUM(signed_return_income)   AS signed_return_income,
+               SUM(absolute_return_income) AS absolute_return_income,
+               SUM(transaction_rows)       AS transaction_rows
+        FROM v_return_income_analysis{where}
+        GROUP BY 1 ORDER BY SUM(absolute_return_income) DESC NULLS LAST""", params)
+
+    months = [r["period_month"] for r in fetch_all("""
+        SELECT DISTINCT period_month FROM v_return_income_analysis
+        WHERE financial_year = %(fy)s AND period_month IS NOT NULL
+        ORDER BY period_month""", {"fy": f.financial_year})]
+
+    return {"items": rows, "by_manager": by_manager, "months": months,
+            "total": total, "meta": meta(f.financial_year),
             "gst_note": GST_NOTE}
 
 
@@ -447,19 +467,41 @@ def new_business(financial_year: int = Query(2026), f: Filters = Depends(filters
     if f.manager:
         clause = " AND canonical_manager = %(manager)s"
         params["manager"] = f.manager
+    # The period narrows the same rows rather than selecting a different view,
+    # so a month, a quarter and the year to date are the same figures at
+    # different grain and cannot disagree with each other.
+    if f.quarter:
+        clause += " AND financial_quarter = %(quarter)s"
+        params["quarter"] = f.quarter
+    if f.month:
+        clause += " AND period_month = %(month)s"
+        params["month"] = f.month
+
     rows = fetch_all(f"""
-        SELECT canonical_manager, financial_quarter,
-               gross_new_business, negative_new_business_corrections,
-               new_business_cancellations, net_new_business,
-               new_business_growth_target, growth_target_achievement
+        SELECT canonical_manager,
+               SUM(new_business_count)                AS new_business_count,
+               SUM(correction_count)                  AS correction_count,
+               SUM(cancellation_count)                AS cancellation_count,
+               SUM(transaction_count)                 AS transaction_count,
+               SUM(gross_new_business)                AS gross_new_business,
+               SUM(negative_new_business_corrections) AS negative_new_business_corrections,
+               SUM(new_business_cancellations)        AS new_business_cancellations,
+               SUM(net_new_business)                  AS net_new_business
         FROM v_new_business_analysis
         WHERE financial_year = %(fy)s{clause}
-        ORDER BY financial_quarter, net_new_business DESC NULLS LAST""", params)
+        GROUP BY canonical_manager
+        ORDER BY SUM(net_new_business) DESC NULLS LAST""", params)
+
+    # Months present in the year, so the interface can offer only periods that
+    # exist rather than a fixed twelve with most of them empty.
+    months = [r["period_month"] for r in fetch_all("""
+        SELECT DISTINCT period_month FROM v_new_business_analysis
+        WHERE financial_year = %(fy)s ORDER BY period_month""",
+        {"fy": financial_year})]
+
     return {
-        "items": [{**r,
-                   "growth_target_achievement": Ratio.of(r["growth_target_achievement"],
-                                                         NO_BUDGET).model_dump()}
-                  for r in rows],
+        "items": rows,
+        "months": months,
         "meta": meta(financial_year, notes=[
             "Future new business is never forecast. New business is recognised only "
             "when it appears in Sales Transactions, so it is absent from Latest "
