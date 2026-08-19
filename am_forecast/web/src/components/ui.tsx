@@ -122,13 +122,16 @@ export function Failed({ error, retry }: { error: unknown; retry?: () => void })
  * rows on screen. Summing the visible page would silently understate every
  * total the moment pagination kicks in.
  */
-export function DataTable({ columns, rows, serverTotals, caption, onRowClick }: {
+export function DataTable({ columns, rows, serverTotals, caption, onRowClick, rowKey }: {
   columns: { key: string; label: string; render?: (row: any) => React.ReactNode;
              align?: "left" | "right"; hint?: string }[];
   rows: any[];
   serverTotals?: Record<string, React.ReactNode>;
   caption?: string;
   onRowClick?: (row: any) => void;
+  /** Unique key per row. Supply it whenever canonical_manager is not unique in
+   *  the list -- a monthly table for one manager repeats it on every row. */
+  rowKey?: (row: any) => string;
 }) {
   if (!rows.length) return <Empty what={caption ?? "records"} />;
   return (
@@ -146,8 +149,14 @@ export function DataTable({ columns, rows, serverTotals, caption, onRowClick }: 
           </tr>
         </thead>
         <tbody>
+          {/* Falling back to canonical_manager gives every row in a single
+              manager's monthly table the SAME key. React then cannot tell the
+              rows apart: switching from a manager with twelve months to one with
+              three left the first rows showing the previous manager's figures,
+              under the new manager's name. Index is the safe fallback -- it is at
+              least unique within the list. */}
           {rows.map((row, i) => (
-            <tr key={row.id ?? row.policy_id ?? row.canonical_manager ?? i}
+            <tr key={rowKey ? rowKey(row) : (row.id ?? row.policy_id ?? i)}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={onRowClick ? "clickable" : ""}>
               {columns.map((c) => {

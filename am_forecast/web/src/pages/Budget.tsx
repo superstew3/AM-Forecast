@@ -110,26 +110,34 @@ export default function Budget() {
         </div>
       </div>
 
-      {/* The business-wide rate, on its own and clearly labelled with how many
-          managers it actually reaches. Changing it used to be one option in a
-          dropdown next to "Manager", which is a thin line between adjusting one
-          person and adjusting everyone. */}
-      <Panel title="Business-wide growth goal"
-             subtitle="The default every manager inherits unless they have their own rate.">
+      {/* The default rate, named for what it actually is.
+          It was labelled "business-wide growth goal", which reads as a separate
+          figure that can be set on its own. It is not: the business target on
+          the performance page is the SUM of the manager budgets -- $502,374.20
+          on both sides, to the cent -- so there is nothing to set independently.
+          Changing this rate necessarily moves every manager who has not been
+          given their own, and the panel now says so before the click rather than
+          after. To move the business total without touching a particular
+          manager, give that manager their own rate first. */}
+      <Panel title="Default growth goal"
+             subtitle="The rate a manager is on unless they have been given their own. The business target on the performance page is the sum of the manager budgets, so this moves that total by moving the managers inside it.">
         <div className="global-rate">
           <div className="global-rate-figure">
-            <div className="metric-label">Current</div>
+            <div className="metric-label">Current default</div>
             <div className="metric-value">
               {globalRate ? percent({ value: globalRate.growth_pct, available: true }) : "—"}
             </div>
             <div className="metric-sub">
-              Applies to {managerCount - overridden.size} of {managerCount} managers.
-              {overridden.size > 0 && <> {overridden.size} have their own rate and will not move.</>}
+              {overridden.size > 0
+                ? <>Changing it moves <strong>{managerCount - overridden.size} of {managerCount}</strong> managers.
+                    {" "}{overridden.size} have their own rate and will not move.</>
+                : <>Changing it moves <strong>all {managerCount}</strong> managers.
+                    None has their own rate yet.</>}
             </div>
           </div>
           {globalDraft ? (
             <div className="rate-edit">
-              <label>New rate
+              <label>New default
                 <input type="number" step="0.005" value={globalDraft.pct} autoFocus
                        onChange={(e) => setGlobalDraft({ ...globalDraft, pct: e.target.value })} />
               </label>
@@ -142,17 +150,21 @@ export default function Budget() {
                       onClick={() => save.mutate({
                         scope: "global", growth_pct: Number(globalDraft.pct),
                         reason: globalDraft.reason })}>
-                Apply to {managerCount - overridden.size} managers
+                Move {managerCount - overridden.size} managers
               </button>
               <button onClick={() => setGlobalDraft(null)}>Cancel</button>
             </div>
           ) : (
             <button onClick={() => setGlobalDraft({
               pct: String(globalRate?.growth_pct ?? 0.075), reason: "" })}>
-              Change the business-wide goal
+              Change the default
             </button>
           )}
         </div>
+        <p className="footnote">
+          To hold a manager steady while the default moves, set that manager's own
+          rate first — it takes precedence and the default will no longer reach them.
+        </p>
       </Panel>
 
       <Panel title={`${label} — by manager`}
@@ -236,6 +248,7 @@ export default function Budget() {
                subtitle="The quarterly target is spread by each month's share of that quarter's original forecast, not in equal thirds.">
           <DataTable
             caption="months"
+            rowKey={(m: any) => `${m.canonical_manager}-${m.forecast_month}`}
             rows={d.monthly.filter((m: any) => m.canonical_manager === drill
               && (quarter == null || m.financial_quarter === quarter))}
             columns={[
@@ -243,6 +256,14 @@ export default function Budget() {
                 render: (r: any) => monthAU(r.forecast_month) },
               { key: "original_forecast", label: "Original forecast", align: "right",
                 render: (r: any) => money({ value: r.original_forecast, available: true }) },
+              // The rate per month, because a later change to one quarter leaves
+              // the months inside a single year on different rates. Showing only
+              // the money hides which ones moved.
+              { key: "growth_pct", label: "Goal", align: "right",
+                render: (r: any) => (r.growth_pct == null ? "N/A"
+                  : percent({ value: r.growth_pct, available: true })) },
+              { key: "growth_basis", label: "From",
+                render: (r: any) => <span className={`chip chip-${r.growth_basis}`}>{r.growth_basis}</span> },
               { key: "new_business_growth_target", label: "Growth target", align: "right",
                 render: (r: any) => money({ value: r.new_business_growth_target, available: true }) },
               { key: "total_budget", label: "Budget target", align: "right",
