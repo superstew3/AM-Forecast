@@ -47,3 +47,8 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# stale/backup trees and scratch files (must not be re-tracked)
+/am_forecast_prev/
+/am_forecast_prev_16/
+/scratch_*.txt
