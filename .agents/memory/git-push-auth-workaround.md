@@ -26,3 +26,10 @@ environment (e.g. "auto-commit and push after every change"), use this pattern i
 paste tokens into shell commands or chat literally. If push fails with 401, the secret's stored
 token may be stale/wrong (e.g. accidentally holds a password instead of a PAT) — re-request it
 rather than re-debugging git config.
+
+**Side effect:** pushing straight to a URL like this (rather than to the configured `origin`
+remote) does NOT update the local `refs/remotes/origin/<branch>` tracking ref. Commands that read
+that cached ref (`git log origin/main`, `git ls-tree origin/main`) can show stale state even
+though the push succeeded and GitHub is current. Run `git fetch origin <branch>` (with the same
+header/env bypass) after pushing if you need local commands to reflect the live remote, or check
+liveness directly with `git ls-remote origin <branch>`.
