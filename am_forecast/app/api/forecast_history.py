@@ -18,7 +18,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from .core import GST_NOTE, Meta, current_user, fetch_all, fetch_one, meta
+from .core import current_financial_year, GST_NOTE, Meta, current_user, fetch_all, fetch_one, meta
 
 router = APIRouter()
 
@@ -47,9 +47,10 @@ class HistoryRow(BaseModel):
 
 
 @router.get("/forecast-history", tags=["forecast"])
-def forecast_history(manager: str = Query(...), financial_year: int = Query(2026),
+def forecast_history(manager: str = Query(...), financial_year: int | None = Query(None),
                      user=Depends(current_user)):
     """The forecast timeline for one manager and one financial year."""
+    financial_year = financial_year or current_financial_year()
     who = fetch_one("""SELECT canonical_manager FROM reporting_manager
                        WHERE canonical_manager = %(m)s""", {"m": manager})
     if who is None:

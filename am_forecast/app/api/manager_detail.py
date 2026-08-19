@@ -19,7 +19,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from .core import GST_NOTE, Meta, Money, Ratio, current_user, fetch_all, fetch_one, meta
+from .core import current_financial_year, GST_NOTE, Meta, Money, Ratio, current_user, fetch_all, fetch_one, meta
 
 router = APIRouter()
 
@@ -132,9 +132,10 @@ def _sum(values) -> Decimal | None:
 
 @router.get("/managers/{manager}/detail", response_model=ManagerDetail,
             tags=["managers"])
-def manager_detail(manager: str, financial_year: int = Query(2026),
+def manager_detail(manager: str, financial_year: int | None = Query(None),
                    user=Depends(current_user)):
     """Everything about one account manager for one financial year."""
+    financial_year = financial_year or current_financial_year()
     who = fetch_one("""SELECT canonical_manager, status, include_in_rankings
                        FROM reporting_manager WHERE canonical_manager = %(m)s""",
                     {"m": manager})

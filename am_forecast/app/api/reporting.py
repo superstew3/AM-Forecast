@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from .core import (
+    current_financial_year,
     GST_NOTE, Filters, Meta, Money, Page, Ratio, columns_of, current_user,
     fetch_all, fetch_one, filters, meta, paginate,
 )
@@ -53,7 +54,8 @@ class BusinessSummary(BaseModel):
 
 
 @router.get("/business", response_model=BusinessSummary, tags=["business"])
-def business(financial_year: int = Query(2026), user=Depends(current_user)):
+def business(financial_year: int | None = Query(None), user=Depends(current_user)):
+    financial_year = financial_year or current_financial_year()
     row = fetch_one("""SELECT * FROM v_business_dashboard WHERE financial_year=%(fy)s""",
                     {"fy": financial_year})
     if row is None:
@@ -243,7 +245,7 @@ def _aggregate(rows: list[dict], period: str, cut_month) -> list[dict]:
 
 @router.get("/managers", response_model=ManagerResponse, tags=["managers"])
 def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"),
-             financial_year: int = Query(2026),
+             financial_year: int | None = Query(None),
              include_non_ranked: bool = Query(False),
              f: Filters = Depends(filters), user=Depends(current_user)):
     """Manager performance at month, quarter, year-to-date or full-year grain.
@@ -252,6 +254,7 @@ def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"
     actual income still counts towards business totals: those are different
     questions and the flags are separate.
     """
+    financial_year = financial_year or current_financial_year()
     params = {"fy": financial_year}
     sql = _MANAGER_SQL + " WHERE base.financial_year = %(fy)s"
     if f.manager:
@@ -420,6 +423,11 @@ def forecast_movement(f: Filters = Depends(filters), limit: int = 200, offset: i
 
 @router.get("/return-income", tags=["returns"])
 def return_income(f: Filters = Depends(filters), user=Depends(current_user)):
+    # This endpoint takes its year from Filters rather than its own argument, so
+    # it needs the default here or it would query every year at once and report a
+    # total nobody asked for.
+    if f.financial_year is None:
+        f.financial_year = current_financial_year()
     where, params = f.clauses(columns_of("v_return_income_analysis"))
     rows = fetch_all(f"""
         SELECT derived_classification,
@@ -460,8 +468,9 @@ def return_income(f: Filters = Depends(filters), user=Depends(current_user)):
 # --- new business -------------------------------------------------------------
 
 @router.get("/new-business", tags=["new-business"])
-def new_business(financial_year: int = Query(2026), f: Filters = Depends(filters),
+def new_business(financial_year: int | None = Query(None), f: Filters = Depends(filters),
                  user=Depends(current_user)):
+    financial_year = financial_year or current_financial_year()
     params = {"fy": financial_year}
     clause = ""
     if f.manager:

@@ -20,6 +20,7 @@ from ..importers import AcceptError, accept, prepare, reject, rollback
 from ..matching import apportion, manual_match, reject_match, run_matching
 from ..validation import ZERO_EXPECTED_EXPLANATION
 from .core import (
+    current_financial_year,
     DSN, GST_NOTE, Filters, Money, columns_of, current_user, fetch_all, fetch_one,
     filters, meta, paginate, require_admin, require_manager,
 )
@@ -371,8 +372,9 @@ def upload_rollback(batch_id: int, body: ReasonBody, user=Depends(require_admin)
 # --- budget -------------------------------------------------------------------
 
 @router.get("/budget", tags=["budget"])
-def budget(financial_year: int = Query(2026), user=Depends(current_user)):
+def budget(financial_year: int | None = Query(None), user=Depends(current_user)):
     """Budget with the active assumption and where in the hierarchy it came from."""
+    financial_year = financial_year or current_financial_year()
     quarters = fetch_all("""
         SELECT canonical_manager, financial_quarter, original_renewal_forecast,
                growth_basis, growth_pct, dollar_override, new_business_growth_target,

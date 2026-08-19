@@ -166,8 +166,19 @@ def analyse_staged_coverage(cur, batch_id: int) -> CoverageReport:
         else:
             report.months.append(mc)
 
-    # A snapshot taken after a month has completed cannot be compared against a
-    # cut-off that still sits before it.
+    # The cut-off no longer blocks an upload.
+    #
+    # This used to refuse a renewals file whenever transactions ran past the
+    # stored cut-off, on the grounds that a completed month would be compared as
+    # though still open. That was a real hazard while the cut-off decided which
+    # months were finished -- but migration 0020 moved that decision to the
+    # calendar, which cannot be stale, and the importer now refuses to write any
+    # month at or before the current one regardless of what any setting says.
+    #
+    # So the block guarded against something that can no longer happen, while
+    # still stopping a legitimate upload until somebody went and changed a
+    # setting that no longer affects the outcome. It is reported rather than
+    # enforced: the information is worth having, the refusal is not.
     if staged:
         earliest = min(staged)
         if earliest <= cut_month and any(m > cut_month for m in staged):
@@ -176,9 +187,9 @@ def analyse_staged_coverage(cur, batch_id: int) -> CoverageReport:
             if latest_txn and latest_txn.replace(day=1) > cut_month:
                 report.cut_off_stale = True
                 report.warnings.append(
-                    f"Reporting Cut-Off Date is {cut_off} but actual transactions run "
-                    f"to {latest_txn}. Update the cut-off before accepting, or a "
-                    "completed month will be compared as though it were still open.")
-                report.requires_confirmation = True
+                    f"The reporting cut-off ({cut_off}) sits before the latest "
+                    f"transaction ({latest_txn}). This no longer affects the "
+                    f"upload: months are opened and closed by the calendar, and "
+                    f"this file can only write months after the current one.")
 
     return report

@@ -15,7 +15,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from .core import GST_NOTE, Meta, Money, Ratio, current_user, fetch_all, fetch_one, meta
+from .core import current_financial_year, GST_NOTE, Meta, Money, Ratio, current_user, fetch_all, fetch_one, meta
 
 router = APIRouter()
 
@@ -82,9 +82,10 @@ class YearOverYear(BaseModel):
 
 @router.get("/analytics/year-over-year", response_model=YearOverYear,
             tags=["analytics"])
-def year_over_year(financial_year: int = Query(2026), manager: str | None = None,
+def year_over_year(financial_year: int | None = Query(None), manager: str | None = None,
                    user=Depends(current_user)):
     """This year against last, month by month, with the difference explained."""
+    financial_year = financial_year or current_financial_year()
     cut = _cut_month()
     months = _fy_months(financial_year)
     params = {"fy": financial_year, "py": financial_year - 1, "mgr": manager}
@@ -224,7 +225,7 @@ def year_over_year(financial_year: int = Query(2026), manager: str | None = None
 # --- all managers, month by month ---------------------------------------------
 
 @router.get("/analytics/manager-matrix", tags=["analytics"])
-def manager_matrix(financial_year: int = Query(2026),
+def manager_matrix(financial_year: int | None = Query(None),
                    measure: str = Query("net_actual",
                                         pattern="^(net_actual|budget|variance|"
                                                 "achievement|original_forecast)$"),
@@ -235,6 +236,7 @@ def manager_matrix(financial_year: int = Query(2026),
     One measure at a time, because a matrix showing several measures at once is
     unreadable and invites mis-reading one for another.
     """
+    financial_year = financial_year or current_financial_year()
     cut = _cut_month()
     months = _fy_months(financial_year)
     params = {"fy": financial_year}

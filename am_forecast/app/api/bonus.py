@@ -29,6 +29,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .core import (
+    current_financial_year,
     DSN, GST_NOTE, current_user, fetch_all, fetch_one, meta, require_admin,
 )
 
@@ -180,9 +181,10 @@ def _quarter_rows(financial_year: int, manager: str | None = None) -> list[dict]
 
 
 @router.get("/bonus", tags=["bonus"])
-def bonus(financial_year: int = Query(2026), manager: str | None = None,
+def bonus(financial_year: int | None = Query(None), manager: str | None = None,
           include_non_ranked: bool = Query(False), user=Depends(current_user)):
     """Quarterly bonus for every manager, with year-to-date totals."""
+    financial_year = financial_year or current_financial_year()
     rows = [r for r in _quarter_rows(financial_year, manager)
             if include_non_ranked or r["include_in_rankings"]]
 
@@ -299,9 +301,10 @@ def bonus(financial_year: int = Query(2026), manager: str | None = None,
 
 
 @router.get("/bonus/{manager}", tags=["bonus"])
-def bonus_for_manager(manager: str, financial_year: int = Query(2026),
+def bonus_for_manager(manager: str, financial_year: int | None = Query(None),
                       user=Depends(current_user)):
     """One manager's bonus position, quarter by quarter and month by month."""
+    financial_year = financial_year or current_financial_year()
     who = fetch_one("""SELECT canonical_manager FROM reporting_manager
                        WHERE canonical_manager = %(m)s""", {"m": manager})
     if who is None:

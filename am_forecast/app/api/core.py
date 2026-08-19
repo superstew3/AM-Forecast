@@ -174,6 +174,21 @@ class Meta(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+def current_financial_year() -> int:
+    """The financial year we are actually in, from the calendar.
+
+    Every endpoint defaulted to Query(2026) -- a literal that would have gone
+    quietly wrong on 1 July 2027, returning last year's figures to anyone who did
+    not pick a year by hand, with nothing on screen to say so.
+
+    Derived in Australia/Melbourne through the same function the rest of the
+    system uses, so the app rolls into a new financial year without anybody
+    touching it.
+    """
+    return fetch_one("""SELECT au_financial_year(
+        (now() AT TIME ZONE 'Australia/Melbourne')::date) AS fy""")["fy"]
+
+
 def meta(financial_year: int | None = None, notes: Iterable[str] = ()) -> Meta:
     row = fetch_one("SELECT cut_off_date FROM reporting_settings WHERE id = 1")
     return Meta(cut_off_date=row["cut_off_date"],
@@ -265,6 +280,16 @@ def filters(
     batch_id: int | None = None,
     include_excluded: bool = False,
 ) -> Filters:
+    # Deliberately NOT defaulted here.
+    #
+    # Defaulting the year in this shared dependency looked tidier and broke the
+    # export: it aliases only the first condition of the WHERE clause, so adding
+    # a year condition ahead of the others left the next column unqualified and
+    # ambiguous across a join. A default that changes the SHAPE of a query, not
+    # just its values, does not belong in something this widely used.
+    #
+    # Endpoints that need a year default it themselves, where the effect is
+    # visible in one place.
     return Filters(financial_year=financial_year, quarter=quarter, month=month,
                    manager=manager, policy_class=policy_class,
                    underwriter=underwriter, category=category, direction=direction,

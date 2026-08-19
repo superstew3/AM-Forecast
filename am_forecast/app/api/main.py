@@ -23,6 +23,7 @@ from .forecast_history import router as forecast_history_router
 from .manager_detail import router as manager_detail_router
 from .forecast_months import router as forecast_months_router
 from .operations import router as operations_router
+from .performance import router as performance_router
 from .settings import router as settings_router
 from .reporting import router as reporting_router
 
@@ -51,6 +52,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(forecast_history_router, prefix="/api")
 app.include_router(bonus_router, prefix="/api")
 app.include_router(operations_router, prefix="/api")
+app.include_router(performance_router, prefix="/api")
 app.include_router(forecast_months_router, prefix="/api")
 
 
