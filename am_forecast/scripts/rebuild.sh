@@ -121,6 +121,20 @@ if len(paths) > 1:
     print("    establish earlier months deliberately, not by loading these")
 PY
 
+# July and August 2026 come from figures supplied directly, not from a CSV in
+# CSV_DIR: no extract covers either month completely (see the comments in
+# establish_july_2026_baseline.sql and set_month_forecast_from_file.py). A
+# rebuild that skips these two steps produces a database that looks complete
+# but silently has no forecast for either month.
+echo "==> July 2026: establishing from supplied figures"
+psql "$DSN" -X -q -v ON_ERROR_STOP=1 -f scripts/establish_july_2026_baseline.sql > /dev/null
+
+echo "==> August 2026: establishing from the 14 July extract"
+JULY14=$(find "$CSV_DIR" -maxdepth 1 -iname '*20260714*Renewals*' -print -quit)
+[ -n "$JULY14" ] || { echo "No 14 July renewals extract found in $CSV_DIR (looked for *20260714*Renewals*)."; exit 1; }
+python3 scripts/set_month_forecast_from_file.py "$DSN" "$JULY14" --month=2026-08-01 \
+    --reason="14 July extract; August had not yet renewed"
+
 echo "==> Users"
 python3 scripts/create_users.py "$DSN"
 
