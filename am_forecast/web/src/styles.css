@@ -643,3 +643,13 @@ button.primary:hover:not(:disabled) { background: #17405e; }
 .total-bonus { font-weight: 700; }
 .months-note { font-size: var(--t-xs); color: var(--ink-soft); margin-top: 10px; }
 .empty { font-size: var(--t-sm); color: var(--ink-soft); padding: 8px 0; }
+
+/* Two charts abreast; stacked once there is not room for both to stay legible,
+   since a bar chart squeezed below about 380px stops being readable. */
+.chart-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 900px) { .chart-pair { grid-template-columns: 1fr; } }
+
+/* Quarter tabs inside the drill-down sit next to a heading, so they are smaller
+   than the page-level set and must not be mistaken for them. */
+.quarter-tabs-sm .quarter-tab { padding: 3px 10px; font-size: var(--t-xs); }
+.manager-months .months-head { flex-wrap: wrap; }

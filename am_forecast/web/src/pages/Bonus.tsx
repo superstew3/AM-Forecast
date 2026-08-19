@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, money, percent } from "../lib/api";
 import { YearOptions, usePeriods } from "../lib/usePeriods";
+import { ChangeBars } from "../components/charts";
 import { DataTable, Failed, GstBanner, Loading, Metric, Panel } from "../components/ui";
 
 /* The bonus tracker, rebuilt around one question: what is happening in the
@@ -31,10 +32,53 @@ function Pill({ status }: { status: string }) {
   return <span className={`pill pill-${TONE[status] ?? "none"}`}>{status}</span>;
 }
 
+/** Fold the started quarters into one row per manager.
+ *
+ * A quarter that has not begun contributes nothing rather than a zero, so an
+ * untouched Q4 cannot drag a manager's position down -- the same rule the API
+ * already applies to its own year-to-date totals. Pace is recomputed from the
+ * summed figures rather than averaged: averaging percentages across quarters of
+ * different size gives a number that belongs to nobody.
+ */
+function ytdRows(quarters: any[]): any[] {
+  const by = new Map<string, any>();
+  for (const q of quarters) {
+    if (!q.quarter_started) continue;
+    const k = q.canonical_manager;
+    const a = by.get(k) ?? {
+      canonical_manager: k, quarter_started: true, quarter_complete: false,
+      months_elapsed: 0, months_in_quarter: 0,
+      actual_income: 0, budget_to_date: 0, budget_target: 0,
+      income_still_required: 0, total_bonus: 0, projected_bonus: 0,
+      bonus_at_target: 0,
+    };
+    a.months_elapsed += Number(q.months_elapsed ?? 0);
+    a.months_in_quarter += Number(q.months_in_quarter ?? 0);
+    a.actual_income += Number(q.actual_income ?? 0);
+    a.budget_to_date += Number(q.budget_to_date ?? 0);
+    a.budget_target += Number(q.budget_target ?? 0);
+    a.income_still_required += Number(q.income_still_required ?? 0);
+    a.total_bonus += Number(q.total_bonus ?? 0);
+    a.projected_bonus += Number(q.projected_bonus ?? q.total_bonus ?? 0);
+    a.bonus_at_target += Number(q.bonus_at_target ?? 0);
+    by.set(k, a);
+  }
+  return [...by.values()].map((a) => {
+    const ratio = a.budget_to_date > 0 ? a.actual_income / a.budget_to_date : null;
+    const word = ratio == null ? null
+      : ratio >= 1 ? "ahead" : ratio >= 0.9 ? "on pace"
+      : ratio >= 0.6 ? "behind" : "well behind";
+    return { ...a,
+      pace_variance: a.budget_to_date > 0 ? a.actual_income - a.budget_to_date : null,
+      pace_achievement: ratio, pace: word, status: word ?? "in progress" };
+  }).sort((x, y) => x.canonical_manager.localeCompare(y.canonical_manager));
+}
+
 export default function Bonus() {
   const { years, currentFy } = usePeriods();
   const [fyPick, setFyPick] = useState<number | null>(null);
   const fy = fyPick ?? currentFy;
+  // null = follow the live quarter, 0 = year to date, 1-4 = that quarter.
   const [quarterPick, setQuarterPick] = useState<number | null>(null);
   const [manager, setManager] = useState<string | null>(null);
 
@@ -58,13 +102,23 @@ export default function Bonus() {
     return qs.length ? Math.max(...qs) : 1;
   }, [all.data]);
 
+  if (all.isLoading) return <Loading what="the bonus tracker" />;
   if (all.isError) return <Failed error={all.error} retry={() => all.refetch()} />;
-  if (!all.data) return <Loading what="the bonus tracker" />;
-  const d = all.data;
+  const d = all.data!;
 
   const quarter = quarterPick ?? liveQuarter;
-  const rows = d.quarters.filter((q: any) => q.financial_quarter === quarter);
-  const label = rows[0]?.quarter_label ?? `Q${quarter}`;
+  const isYtd = quarter === 0;
+
+  // Year to date folds the started quarters into one row per manager. A quarter
+  // that has not begun contributes nothing rather than a zero, so an untouched
+  // Q4 cannot drag somebody down -- the same rule the API already applies to its
+  // own year-to-date totals.
+  const rows = isYtd ? ytdRows(d.quarters) :
+    d.quarters.filter((q: any) => q.financial_quarter === quarter);
+
+  const label = isYtd ? "Year to date"
+    : (d.quarters.find((q: any) => q.financial_quarter === quarter)?.quarter_label
+       ?? `Q${quarter}`);
   const elapsed = rows[0]?.months_elapsed ?? 0;
   const inQuarter = rows[0]?.months_in_quarter ?? 3;
   const started = rows.some((r: any) => r.quarter_started);
@@ -86,6 +140,10 @@ export default function Bonus() {
 
       <div className="quarter-bar">
         <div className="quarter-tabs">
+          <button onClick={() => setQuarterPick(0)}
+                  className={`quarter-tab${quarter === 0 ? " is-active" : ""}`}>
+            Year to date
+          </button>
           {[1, 2, 3, 4].map((q) => {
             const qr = d.quarters.find((x: any) => x.financial_quarter === q);
             return (
@@ -98,7 +156,9 @@ export default function Bonus() {
           })}
         </div>
         <div className="quarter-progress">
-          {started ? `${elapsed} of ${inQuarter} months complete` : "Not started"}
+          {isYtd ? "Quarters that have started"
+            : started ? `${elapsed} of ${inQuarter} months complete`
+            : "Not started"}
         </div>
       </div>
 
@@ -153,6 +213,31 @@ export default function Bonus() {
         />
       </Panel>
 
+      {/* Both charts read the selected period, so switching quarter or moving to
+          year to date moves them with everything else. They previously showed a
+          fixed year-wide figure regardless of what was selected above them. */}
+      <div className="chart-pair">
+        <Panel title={`Projected bonus — ${label}`}
+               subtitle="At the pace of the months completed. A quarter not yet begun contributes nothing.">
+          <ChangeBars limit={15} items={rows.map((r: any) => ({
+            label: r.canonical_manager,
+            change: Number(r.projected_bonus ?? r.total_bonus ?? 0),
+          }))} />
+        </Panel>
+        <Panel title={`Still needed — ${label}`}
+               subtitle="Income required over the rest of the period to reach the target. Bars to the left are short of it.">
+          {/* Deliberately the income still required rather than "actual less
+              target". One month into three the latter shows everybody heavily
+              under simply because two months have not happened, which is the
+              comparison this page was rebuilt to stop making. This asks the
+              useful question instead: how much more is needed. */}
+          <ChangeBars limit={15} items={rows.map((r: any) => ({
+            label: r.canonical_manager,
+            change: -Number(r.income_still_required ?? 0),
+          }))} />
+        </Panel>
+      </div>
+
       {/* A picker as well as a row click: comparing two managers previously meant
           scrolling back up and hunting for the right row. */}
       <Panel title="One manager, month by month"
@@ -170,16 +255,21 @@ export default function Bonus() {
         {!manager && <p className="empty">Choose a manager above.</p>}
         {manager && detail.isLoading && <Loading what={manager} />}
         {manager && detail.data && (
-          <ManagerMonths d={detail.data} quarter={quarter} label={label} />
+          <ManagerMonths d={detail.data} quarter={quarter} />
         )}
       </Panel>
     </>
   );
 }
 
-function ManagerMonths({ d, quarter, label }: { d: any; quarter: number; label: string }) {
-  const months = d.months.filter((m: any) => m.financial_quarter === quarter);
-  const q = d.quarters.find((x: any) => x.financial_quarter === quarter);
+function ManagerMonths({ d, quarter }: { d: any; quarter: number }) {
+  // Every quarter of the year is reachable here, including ones that have not
+  // begun: a target set for Q3 is worth seeing in August, and hiding it until
+  // October is the reason the year-wide table existed at all.
+  const [pick, setPick] = useState<number>(quarter || 1);
+  const months = d.months.filter((m: any) => m.financial_quarter === pick);
+  const q = d.quarters.find((x: any) => x.financial_quarter === pick);
+  const label = q?.quarter_label ?? `Q${pick}`;
   if (!q) return <p className="empty">No figures for {label}.</p>;
   const name = (iso: string) =>
     new Date(iso).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
@@ -187,7 +277,16 @@ function ManagerMonths({ d, quarter, label }: { d: any; quarter: number; label: 
   return (
     <div className="manager-months">
       <div className="months-head">
-        <h3>{d.canonical_manager} — {label}</h3>
+        <h3>{d.canonical_manager}</h3>
+        <div className="quarter-tabs quarter-tabs-sm">
+          {d.quarters.map((x: any) => (
+            <button key={x.financial_quarter}
+                    className={`quarter-tab${x.financial_quarter === pick ? " is-active" : ""}`}
+                    onClick={() => setPick(x.financial_quarter)}>
+              {x.quarter_label}
+            </button>
+          ))}
+        </div>
         <Pill status={q.status} />
       </div>
       <div className="table-wrap">
