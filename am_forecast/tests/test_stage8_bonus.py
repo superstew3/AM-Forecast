@@ -115,7 +115,12 @@ def test_bonus_above_target_is_base_plus_twenty_percent(conn):
         WHERE financial_year = 2026 AND quarter_started AND target_reached""")
     for _, expected, target, actual, base, above, total in achieved:
         assert cents(base) == base_bonus(target, expected, conn)
-        assert cents(above) == cents((actual - target) * Decimal("0.20"))
+        # Divided by the GST divisor like every other payment figure. Without
+        # it this compared a GST-exclusive bonus against a GST-inclusive
+        # calculation and was wrong by exactly 1/1.1 -- latent since the GST
+        # change, and only exposed once a manager actually cleared a target.
+        _d, rate, gst = scheme(conn)
+        assert cents(above) == cents((actual - target) * rate / gst)
         assert cents(total) == cents(base + above)
 
 
@@ -146,7 +151,12 @@ def test_bonus_appears_once_a_target_is_cleared(admin, conn):
     expected, target, actual, base, above, total, reached = row
     if reached:
         assert cents(base) == base_bonus(target, expected, conn)
-        assert cents(above) == cents((actual - target) * Decimal("0.20"))
+        # Divided by the GST divisor like every other payment figure. Without
+        # it this compared a GST-exclusive bonus against a GST-inclusive
+        # calculation and was wrong by exactly 1/1.1 -- latent since the GST
+        # change, and only exposed once a manager actually cleared a target.
+        _d, rate, gst = scheme(conn)
+        assert cents(above) == cents((actual - target) * rate / gst)
         assert cents(total) == cents(base + above)
         assert total > 0
     else:
@@ -176,8 +186,16 @@ def test_a_quarter_that_has_not_started_has_no_bonus_figure(conn):
 def test_projection_is_reported_separately_from_earned(client):
     """Earned and projected are different figures and must not be conflated."""
     d = client.get("/api/bonus?financial_year=2026").json()
-    # Nothing is earned until a quarter closes.
-    assert Decimal(str(d["totals"]["earned_bonus"])) == 0
+    # Earned is what would pay if the quarter closed today -- normally nil
+    # part-way through, but not zero by rule: a manager who has already cleared
+    # the whole quarter's target has earned it. Asserting a flat zero encoded one
+    # dataset's state, and broke the moment somebody got ahead.
+    earned = Decimal(str(d["totals"]["earned_bonus"]))
+    cleared = [q for q in d["quarters"] if q["target_reached"]]
+    if not cleared:
+        assert earned == 0, "nothing has cleared its target, so nothing is earned"
+    else:
+        assert earned > 0
     # A projection only exists for a quarter part-way through. Where every
     # quarter is either closed or unstarted there is nothing to project.
     projected = Decimal(str(d["totals"]["projected_bonus"]))
