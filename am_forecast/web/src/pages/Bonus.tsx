@@ -32,20 +32,20 @@ function Pill({ status }: { status: string }) {
 }
 
 export default function Bonus() {
-  const { years, defaultYear } = usePeriods();
+  const { years, currentFy } = usePeriods();
   const [fyPick, setFyPick] = useState<number | null>(null);
-  const fy = fyPick ?? defaultYear;
+  const fy = fyPick ?? currentFy;
   const [quarterPick, setQuarterPick] = useState<number | null>(null);
   const [manager, setManager] = useState<string | null>(null);
 
   const all = useQuery({
     queryKey: ["bonus", fy],
-    queryFn: () => api(`/api/bonus?financial_year=${fy}&include_non_ranked=true`),
+    queryFn: () => api.bonus(fy!, true),
     enabled: fy != null,
   });
   const detail = useQuery({
     queryKey: ["bonus-manager", fy, manager],
-    queryFn: () => api(`/api/bonus/${encodeURIComponent(manager!)}?financial_year=${fy}`),
+    queryFn: () => api.bonusForManager(manager!, fy!),
     enabled: fy != null && manager != null,
   });
 

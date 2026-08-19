@@ -303,7 +303,9 @@ export const api = {
       `/api/managers/${encodeURIComponent(manager)}/detail?financial_year=${fy}`),
   managers: (params: URLSearchParams) =>
     request<{ items: ManagerRow[]; total: number; meta: Meta }>(`/api/managers?${params}`),
-  bonus: (fy: number) => request<any>(`/api/bonus?financial_year=${fy}`),
+  bonus: (fy: number, includeNonRanked = false) =>
+    request<any>(`/api/bonus?financial_year=${fy}` +
+                 (includeNonRanked ? "&include_non_ranked=true" : "")),
   bonusForManager: (manager: string, fy: number) =>
     request<any>(`/api/bonus/${encodeURIComponent(manager)}?financial_year=${fy}`),
   forecastHistory: (manager: string, fy: number) =>
