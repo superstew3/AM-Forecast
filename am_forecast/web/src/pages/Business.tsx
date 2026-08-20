@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { YearOptions, usePeriods } from "../lib/usePeriods";
-import { api } from "../lib/api";
+import { api, money, percent } from "../lib/api";
 import { BudgetGauge, ChangeBars, MonthlyBars } from "../components/charts";
 import { BaselineWarning, Failed, GstBanner, Loading, Metric, Notes, Panel, Value } from "../components/ui";
 
@@ -107,28 +107,37 @@ export default function Business() {
              }>
         <BudgetGauge actual={scopeActual} budget={anyStarted ? scopeBudget : null}
                      label={`${scopeLabel.toLowerCase()} budget`} />
-        <div className="metric-grid" style={{ marginTop: 14 }}>
-          <Metric label={`${scopeLabel} Actual`}
+        {/* Three figures for the period chosen, then three for the year ahead.
+            Twelve at once, all the same size, meant nothing said which was the
+            answer -- and two of them were repeats: "Year-to-date Budget" appeared
+            in both rows, and "Variance to Budget" restated what the gauge above
+            already shows in a bar and a percentage. */}
+        <div className="metric-grid metric-grid-3" style={{ marginTop: 14 }}>
+          <Metric label={`${scopeLabel} actual`}
                   m={{ value: scopeActual, available: scopeActual !== null,
                        reason: "This period has not started yet." }} emphasis />
-          <Metric label={`${scopeLabel} Budget`}
+          <Metric label={`${scopeLabel} budget`}
                   m={{ value: anyStarted ? scopeBudget : null, available: anyStarted,
                        reason: "This period has not started yet." }} />
           <Metric label={`${scopeLabel} last year`}
                   m={{ value: scopePrior || null, available: scopePrior !== 0,
                        reason: "No prior-year figure for this period." }} />
         </div>
-        <div className="metric-grid" style={{ marginTop: 14 }}>
-          <Metric label="Year-to-date Budget" m={y.ytd_budget} />
-          <Metric label="Variance to Budget" m={y.ytd_variance} />
-          <Metric label="Full-year Budget" m={y.full_year_budget} />
-          <Metric label="Latest Outlook" m={y.latest_outlook}
+
+        <div className="section-rule">Where the full year is heading</div>
+        <div className="metric-grid metric-grid-3">
+          <Metric label="Full-year budget" m={y.full_year_budget} />
+          <Metric label="Latest outlook" m={y.latest_outlook}
                   hint="Actuals for completed months plus Latest Forecast for the rest. No assumed new business." />
-          <Metric label="Remaining Budget Gap" m={y.remaining_gap}
+          <Metric label="Remaining gap" m={y.remaining_gap}
                   hint="Still to be found through new business, retention or other actual activity." />
-          <Metric label="Outlook vs prior year" m={y.outlook_vs_prior_year_pct} kind="percent"
-                  hint="Where the full year is heading against last year's actual result." />
         </div>
+        <p className="months-note">
+          Outlook against last year's result:{" "}
+          <strong>{percent(y.outlook_vs_prior_year_pct)}</strong>.
+          {" "}Year-to-date budget is {money(y.ytd_budget)}, and the gauge above
+          measures the selected period against it.
+        </p>
       </Panel>
 
       <Panel title="Month by month"

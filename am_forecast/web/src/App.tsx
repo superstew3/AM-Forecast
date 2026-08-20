@@ -5,6 +5,7 @@ import { NotSignedIn, api } from "./lib/api";
 import ChangePassword from "./pages/ChangePassword";
 import Login from "./pages/Login";
 import Business from "./pages/Business";
+import Performance from "./pages/Performance";
 import AllManagers from "./pages/AllManagers";
 import ManagerDetail from "./pages/ManagerDetail";
 import ManagerIndex from "./pages/ManagerIndex";
@@ -22,6 +23,7 @@ import Budget from "./pages/Budget";
 
 const AREAS = [
   { to: "/business", label: "Business performance" },
+  { to: "/performance", label: "Performance by month" },
   { to: "/managers-index", label: "Account managers" },
   { to: "/all-managers", label: "All managers by month" },
   { to: "/managers", label: "Compare managers" },
@@ -100,6 +102,7 @@ function Shell({ user, onSignOut }: { user: any; onSignOut: () => void }) {
         <Routes>
           <Route path="/" element={<Navigate to="/business" replace />} />
           <Route path="/business" element={<Business />} />
+          <Route path="/performance" element={<Performance />} />
           <Route path="/managers-index" element={<ManagerIndex />} />
           <Route path="/manager" element={<ManagerDetail />} />
           <Route path="/all-managers" element={<AllManagers />} />

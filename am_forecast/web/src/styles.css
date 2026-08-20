@@ -706,3 +706,23 @@ button.primary:hover:not(:disabled) { background: #17405e; }
   font: inherit; text-decoration: underline; padding: 0;
 }
 .error-note { color: #9a2b2b; font-size: var(--t-sm); margin-top: 8px; }
+
+/* --- Performance page --------------------------------------------------- */
+
+/* Advisories: everything a reader needs to know before trusting a figure,
+   gathered above the figures rather than discovered one row at a time. */
+.advisories { list-style: none; margin: 0; padding: 0; }
+.advisory {
+  font-size: var(--t-sm); padding: 7px 11px; margin-bottom: 6px;
+  border-left: 3px solid var(--line); background: #fafbfc; border-radius: 0 4px 4px 0;
+}
+.advisory-warn { border-left-color: #d9a441; background: #fdf9f1; }
+
+/* A quiet rule that separates two groups of figures without another panel.
+   Twelve metrics in one block read as a wall; six in two named groups read as
+   two answers. */
+.section-rule {
+  margin: 18px 0 10px; padding-top: 12px; border-top: 1px solid var(--line);
+  font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}

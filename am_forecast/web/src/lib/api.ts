@@ -303,6 +303,16 @@ export const api = {
       `/api/managers/${encodeURIComponent(manager)}/detail?financial_year=${fy}`),
   managers: (params: URLSearchParams) =>
     request<{ items: ManagerRow[]; total: number; meta: Meta }>(`/api/managers?${params}`),
+  performance: (fy: number) => request<any>(`/api/performance?financial_year=${fy}`),
+  performanceMonths: (fy: number) =>
+    request<any>(`/api/performance/months?financial_year=${fy}`),
+  forecastMonthStatus: () => request<any>(`/api/forecast-months/status`),
+  grantMonthOverride: (body: any) => request<any>(`/api/forecast-months/override`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) }),
+  revokeMonthOverride: (month: string) =>
+    request<any>(`/api/forecast-months/override/${month}`, { method: "DELETE" }),
+  monthOverrideHistory: () => request<any>(`/api/forecast-months/override/history`),
   bonus: (fy: number, includeNonRanked = false) =>
     request<any>(`/api/bonus?financial_year=${fy}` +
                  (includeNonRanked ? "&include_non_ranked=true" : "")),

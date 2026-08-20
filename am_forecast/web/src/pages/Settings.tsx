@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../lib/api";
+import { api, money, monthAU } from "../lib/api";
 import { usePeriods } from "../lib/usePeriods";
 import { DataTable, Failed, GstBanner, Loading, Panel } from "../components/ui";
 
@@ -22,6 +22,22 @@ export default function Settings() {
   const [cls, setCls] = useState({ source_type: "renewals", source_value: "",
                                    canonical_class: "" });
   const [alias, setAlias] = useState({ source_manager: "", canonical_manager: "" });
+  const [ovMonth, setOvMonth] = useState("");
+  const [ovReason, setOvReason] = useState("");
+
+  const monthStatus = useQuery({ queryKey: ["month-status"],
+                                 queryFn: api.forecastMonthStatus });
+  const ovHistory = useQuery({ queryKey: ["override-history"],
+                               queryFn: api.monthOverrideHistory });
+  const grantOverride = useMutation({
+    mutationFn: () => api.grantMonthOverride({ forecast_month: ovMonth,
+                                               reason: ovReason }),
+    onSuccess: () => { setOvMonth(""); setOvReason(""); invalidate(); },
+  });
+  const revokeOverride = useMutation({
+    mutationFn: (m: string) => api.revokeMonthOverride(m),
+    onSuccess: invalidate,
+  });
 
   const invalidate = () => {
     qc.invalidateQueries();
@@ -60,8 +76,99 @@ export default function Settings() {
         to past periods as well as future ones.
       </div>
 
+      {/* The override, on a screen at last.
+          The endpoint has existed since the two-ledger work and was reachable
+          only by running SQL, which is not an override anybody would use. A
+          locked month is the right default; a default nobody can lift is just an
+          obstruction, and obstructions get worked around in spreadsheets where
+          nothing is audited. */}
+      <Panel title="Forecast months"
+             subtitle="A month is closed to uploads from the moment it begins, so a target cannot move after people have been measured against it. An administrator can reopen one, once, with a reason.">
+        {monthStatus.data && (
+          <DataTable
+            caption="months"
+            rows={monthStatus.data.months}
+            rowKey={(r: any) => r.forecast_month}
+            columns={[
+              { key: "forecast_month", label: "Month",
+                render: (r: any) => monthAU(r.forecast_month) },
+              { key: "state", label: "State",
+                render: (r: any) => <span className={`pill pill-${
+                  r.state === "future" ? "good" : r.state === "in_progress" ? "warn" : "none"
+                }`}>{r.state.replace("_", " ")}</span> },
+              { key: "forecast_income", label: "Forecast", align: "right",
+                render: (r: any) => money({ value: r.forecast_income, available: true }) },
+              { key: "open_to_upload", label: "Uploads",
+                render: (r: any) => (r.open_to_upload
+                  ? <span className="pill pill-good">open</span>
+                  : r.override_pending
+                    ? <span className="pill pill-warn">override open</span>
+                    : <span className="pill pill-none">closed</span>) },
+              { key: "act", label: "",
+                render: (r: any) => (r.override_pending
+                  ? <button className="link-button"
+                            onClick={() => revokeOverride.mutate(r.forecast_month)}>
+                      Withdraw
+                    </button>
+                  : !r.open_to_upload
+                    ? <button className="link-button"
+                              onClick={() => setOvMonth(r.forecast_month)}>
+                        Reopen
+                      </button>
+                    : null) },
+            ]}
+          />
+        )}
+
+        {ovMonth && (
+          <div className="rate-edit rate-edit-standalone">
+            <span className="rate-edit-who">Reopen {monthAU(ovMonth)}</span>
+            <label className="grow">Reason
+              <input value={ovReason} autoFocus
+                     placeholder="Recorded permanently and shown beside the figure it produces"
+                     onChange={(e) => setOvReason(e.target.value)} />
+            </label>
+            <button className="btn-primary"
+                    disabled={grantOverride.isPending || ovReason.trim().length < 8}
+                    onClick={() => grantOverride.mutate()}>
+              Open for one upload
+            </button>
+            <button onClick={() => { setOvMonth(""); setOvReason(""); }}>Cancel</button>
+          </div>
+        )}
+        {grantOverride.isError && (
+          <p className="error-note">
+            {String((grantOverride.error as any)?.message ?? grantOverride.error)}
+          </p>
+        )}
+
+        {ovHistory.data && ovHistory.data.overrides.length > 0 && (
+          <>
+            <div className="section-rule">Overrides granted</div>
+            <DataTable
+              caption="overrides"
+              rows={ovHistory.data.overrides}
+              rowKey={(r: any) => String(r.id)}
+              columns={[
+                { key: "forecast_month", label: "Month",
+                  render: (r: any) => monthAU(r.forecast_month) },
+                { key: "granted_by", label: "By" },
+                { key: "granted_at", label: "When",
+                  render: (r: any) => new Date(r.granted_at)
+                    .toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" }) },
+                { key: "reason", label: "Reason" },
+                { key: "consumed_at", label: "Used",
+                  render: (r: any) => (r.consumed_at
+                    ? <>{r.consumed_file ?? "yes"}</>
+                    : <span className="na">not yet</span>) },
+              ]}
+            />
+          </>
+        )}
+      </Panel>
+
       <Panel title="Reporting cut-off date"
-             subtitle="The line between completed and future periods. It governs what counts as an actual, what is still Pending, and which months are measured against budget.">
+             subtitle="Kept as a record of what the last complete month was taken to be. It no longer decides anything: months are opened and closed by the calendar in Australia/Melbourne, so there is nothing here to keep up to date.">
         <div className="form-row">
           <label>Current
             <input value={periods?.cut_off_date ?? ""} disabled />
