@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from .core import (
+    supplied_month_note,
     current_financial_year,
     GST_NOTE, Filters, Meta, Money, Page, Ratio, columns_of, current_user,
     fetch_all, fetch_one, filters, meta, paginate,
@@ -63,10 +64,7 @@ def business(financial_year: int | None = Query(None), user=Depends(current_user
     notes = []
     if row["coverage_status"] == "partial":
         notes.append(row["period_label"] or "Partial period: not a full financial year.")
-    if financial_year == 2026:
-        notes.append(
-            "July 2026 uses supplied per-manager forecast figures, held at "
-            "manager-month level. Policy-level renewal detail begins August 2026.")
+    notes.extend(supplied_month_note(financial_year))
     return BusinessSummary(
         financial_year=row["financial_year"],
         coverage_status=row["coverage_status"], period_label=row["period_label"],

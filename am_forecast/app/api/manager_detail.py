@@ -19,7 +19,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from .core import current_financial_year, GST_NOTE, Meta, Money, Ratio, current_user, fetch_all, fetch_one, meta
+from .core import supplied_month_note, current_financial_year, GST_NOTE, Meta, Money, Ratio, current_user, fetch_all, fetch_one, meta
 
 router = APIRouter()
 
@@ -393,10 +393,7 @@ def manager_detail(manager: str, financial_year: int | None = Query(None),
     full_original = _sum(original)
 
     notes = []
-    if financial_year == 2026:
-        notes.append("July 2026 uses supplied per-manager forecast figures at "
-                     "manager-month level. Policy-level renewal detail begins "
-                     "August 2026.")
+    notes.extend(supplied_month_note(financial_year))
     if not who["include_in_rankings"]:
         notes.append(f"{manager} is excluded from rankings by default. Actual income "
                      "still counts towards business totals.")

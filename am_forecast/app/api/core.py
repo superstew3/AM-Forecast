@@ -189,6 +189,29 @@ def current_financial_year() -> int:
         (now() AT TIME ZONE 'Australia/Melbourne')::date) AS fy""")["fy"]
 
 
+def supplied_month_note(financial_year: int) -> list[str]:
+    """Name any month held at manager grain rather than policy grain.
+
+    Both callers hard-coded `if financial_year == 2026` with July named in the
+    text. That is true today and silently wrong from 1 July 2027: the note would
+    keep appearing on a year it does not describe, or vanish from a year it does.
+
+    The distinction is already in the data -- a month established from supplied
+    figures carries grain 'manager_month', one built from an extract carries
+    'policy' -- so it is read rather than remembered.
+    """
+    rows = fetch_all("""
+        SELECT DISTINCT forecast_month FROM original_forecast
+        WHERE financial_year = %(fy)s AND grain <> 'policy'
+        ORDER BY forecast_month""", {"fy": financial_year})
+    if not rows:
+        return []
+    months = ", ".join(f"{r['forecast_month']:%B %Y}" for r in rows)
+    return [f"{months} uses supplied per-manager forecast figures, held at "
+            f"manager-month level rather than policy level. Policy-level renewal "
+            f"detail is unavailable for it."]
+
+
 def meta(financial_year: int | None = None, notes: Iterable[str] = ()) -> Meta:
     row = fetch_one("SELECT cut_off_date FROM reporting_settings WHERE id = 1")
     return Meta(cut_off_date=row["cut_off_date"],
