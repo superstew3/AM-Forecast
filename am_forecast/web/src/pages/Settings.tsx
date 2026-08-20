@@ -25,6 +25,11 @@ export default function Settings() {
   const [ovMonth, setOvMonth] = useState("");
   const [ovReason, setOvReason] = useState("");
 
+
+  const invalidate = () => {
+    qc.invalidateQueries();
+  };
+
   const monthStatus = useQuery({ queryKey: ["month-status"],
                                  queryFn: api.forecastMonthStatus });
   const ovHistory = useQuery({ queryKey: ["override-history"],
@@ -38,10 +43,6 @@ export default function Settings() {
     mutationFn: (m: string) => api.revokeMonthOverride(m),
     onSuccess: invalidate,
   });
-
-  const invalidate = () => {
-    qc.invalidateQueries();
-  };
 
   const saveCutOff = useMutation({
     mutationFn: () => api.post("/api/settings/cut-off",

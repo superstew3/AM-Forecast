@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, money, monthAU, percent } from "../lib/api";
+import { api, money, monthAU } from "../lib/api";
 import { YearOptions, usePeriods } from "../lib/usePeriods";
 import { DataTable, Failed, GstBanner, Loading, Metric, Notes, Panel } from "../components/ui";
 
