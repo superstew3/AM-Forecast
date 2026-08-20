@@ -146,7 +146,9 @@ export default function Budget() {
                        onChange={(e) => setGlobalDraft({ ...globalDraft, reason: e.target.value })} />
               </label>
               <button className="btn-primary"
-                      disabled={save.isPending || globalDraft.reason.trim().length < 3}
+                      disabled={save.isPending || globalDraft.reason.trim().length < 3
+                              || globalDraft.pct.trim() === ""
+                              || Number.isNaN(Number(globalDraft.pct))}
                       onClick={() => save.mutate({
                         scope: "global", growth_pct: Number(globalDraft.pct),
                         reason: globalDraft.reason })}>
@@ -155,8 +157,18 @@ export default function Budget() {
               <button onClick={() => setGlobalDraft(null)}>Cancel</button>
             </div>
           ) : (
+            // No hard-coded fallback rate.
+            //
+            // Pre-filling a literal meant that if the setting were ever absent
+            // the form offered 7.5% as though it were the current rate, and
+            // saving it would write a number nobody had chosen -- a hard-coded
+            // rate reintroduced through the interface, which is where four of
+            // the five copies of the exclusion rules came from too. With no
+            // rate to show, the field starts empty, and Save is disabled until
+            // somebody types one.
             <button onClick={() => setGlobalDraft({
-              pct: String(globalRate?.growth_pct ?? 0.075), reason: "" })}>
+              pct: globalRate?.growth_pct != null ? String(globalRate.growth_pct) : "",
+              reason: "" })}>
               Change the default
             </button>
           )}
@@ -184,7 +196,8 @@ export default function Budget() {
                   <button className="rate-button"
                           onClick={() => setDraft({
                             manager: r.canonical_manager,
-                            pct: String(r.growth_pct ?? 0.075), reason: "" })}>
+                            pct: r.growth_pct != null ? String(r.growth_pct) : "",
+                            reason: "" })}>
                     {r.growth_pct == null ? "N/A"
                       : percent({ value: r.growth_pct, available: true })}
                   </button>
@@ -223,7 +236,9 @@ export default function Budget() {
                      onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
             </label>
             <button className="btn-primary"
-                    disabled={save.isPending || draft.reason.trim().length < 3}
+                    disabled={save.isPending || draft.reason.trim().length < 3
+                              || draft.pct.trim() === ""
+                              || Number.isNaN(Number(draft.pct))}
                     onClick={() => save.mutate({
                       scope: scopeForEdit,
                       canonical_manager: draft.manager,

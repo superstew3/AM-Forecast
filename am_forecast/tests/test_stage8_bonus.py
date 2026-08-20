@@ -191,9 +191,20 @@ def test_projection_is_reported_separately_from_earned(client):
     # the whole quarter's target has earned it. Asserting a flat zero encoded one
     # dataset's state, and broke the moment somebody got ahead.
     earned = Decimal(str(d["totals"]["earned_bonus"]))
-    cleared = [q for q in d["quarters"] if q["target_reached"]]
+
+    # Cleared AND with a month behind it.
+    #
+    # target_reached compares the whole quarter's income against the whole
+    # quarter's target, so it can be true before any month has closed -- a
+    # manager whose only month is the one still running can already be above a
+    # target that includes it. The bonus is null there, correctly: there is
+    # nothing to pay against yet. Asserting earned > 0 on target_reached alone
+    # failed on exactly that case, which was the view behaving properly.
+    cleared = [q for q in d["quarters"]
+               if q["target_reached"] and (q["months_elapsed"] or 0) > 0]
     if not cleared:
-        assert earned == 0, "nothing has cleared its target, so nothing is earned"
+        assert earned == 0, ("nothing has cleared its target with a completed "
+                             "month behind it, so nothing is earned")
     else:
         assert earned > 0
     # A projection only exists for a quarter part-way through. Where every

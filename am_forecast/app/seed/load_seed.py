@@ -22,7 +22,7 @@ from app.seed.class_equivalence import class_equivalence_rows  # noqa: E402
 from app.seed.seed_data import (  # noqa: E402
     CATEGORY_MAP, DEFAULT_GROWTH_RATE, EXCLUSION_RULES, MANAGER_ALIASES,
     PERIOD_COVERAGE, REPORTING_MANAGERS, REPORTING_SETTINGS,
-    forecast_baselines, fy2025_26_baselines,
+    forecast_baselines, fy2025_26_baselines, later_baselines,
 )
 
 SEED_ACTOR = "system:seed"
@@ -102,7 +102,8 @@ def load(conn) -> dict:
             """, (cat, cls, desc))
         counts["category_map"] = len(CATEGORY_MAP)
 
-        baselines = forecast_baselines() + fy2025_26_baselines()
+        baselines = (forecast_baselines() + fy2025_26_baselines()
+                     + later_baselines())
         for b in baselines:
             m = b["forecast_month"]
             cur.execute("""

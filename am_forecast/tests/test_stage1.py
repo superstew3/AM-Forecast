@@ -140,12 +140,33 @@ def test_every_source_manager_resolves(conn):
 
 def test_highview_excluded_by_associate_not_only_by_manager(conn):
     """Test 17: rows excluded on an associate field where the manager is not
-    Cam Highview."""
+    the excluded manager.
+
+    The manager name is read from the exclusion rules rather than written here.
+    This test carried the literal 'CAM HIGHVIEW' in its SQL -- the fifth
+    hand-written copy of these rules found in this codebase, after the pin
+    script, two test helpers and a verification script, each wrong differently
+    and none of them visible until a figure disagreed.
+
+    A rule restated in a test is worse than one restated in code: it goes green
+    against its own copy while the real rules drift, so the drift is not merely
+    unnoticed, it is actively vouched for.
+    """
+    excluded_managers = [r[0] for r in rows(conn, """
+        SELECT DISTINCT upper(match_value) FROM exclusion_rule
+        WHERE source_type = 'sales' AND active
+          AND target_field IN ('PolicyAccountManager', 'Group1Abbrev')""")]
+    if not excluded_managers:
+        pytest.skip("no manager-level exclusion rule is configured")
+
     n = scalar(conn, """
         SELECT count(*) FROM sales_transaction
-        WHERE is_excluded AND exclusion_field IN ('PrimaryAssocCode','SecondaryAssocCode')
-          AND upper(source_manager) <> 'CAM HIGHVIEW'""")
-    assert n > 0
+        WHERE is_excluded
+          AND exclusion_field IN ('PrimaryAssocCode', 'SecondaryAssocCode')
+          AND NOT (upper(source_manager) = ANY(%s))""", (excluded_managers,))
+    assert n > 0, ("no row is excluded on an associate field alone; exclusion "
+                   "would then be by manager name only, which loses business "
+                   "written under an excluded associate by somebody else")
 
 
 def test_exclusion_is_by_associate_not_by_manager_name(conn):

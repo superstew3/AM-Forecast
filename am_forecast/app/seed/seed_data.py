@@ -146,6 +146,46 @@ def _months(start: dt.date, end: dt.date):
         m = dt.date(m.year + (m.month == 12), (m.month % 12) + 1, 1)
 
 
+def _au_fy_start(d: dt.date) -> dt.date:
+    """1 July of the financial year containing d."""
+    return dt.date(d.year if d.month >= 7 else d.year - 1, 7, 1)
+
+
+def later_baselines(today: dt.date | None = None) -> list[dict]:
+    """A plain baseline for every financial year after the two described below.
+
+    The two functions here record what actually happened in FY2025-26 and
+    FY2026-27 -- a legacy dashboard for one part, a Renewals Pending snapshot for
+    another, and the managers each did not cover. Those are historical facts and
+    stay written down.
+
+    Nothing covered the years after them. forecast_baseline is INNER JOINed by
+    v_baseline_usable, so a month with no row does not fall back to a default --
+    it disappears from every view built on it. From 1 July 2027 a rebuilt
+    database would have produced no baselines at all, and the months would simply
+    have stopped appearing, with nothing to indicate why.
+
+    So later years are generated: complete, from the snapshot, no exceptions,
+    which is the ordinary case once the legacy handover is behind us. Run to one
+    year ahead of today so a forecast loaded for next year is covered before it
+    arrives.
+    """
+    today = today or dt.date.today()
+    first = dt.date(2027, 7, 1)
+    last_fy = _au_fy_start(today) + dt.timedelta(days=400)
+    end = _au_fy_start(last_fy) + dt.timedelta(days=364)
+    if end < first:
+        return []
+    return [{
+        "forecast_month": m,
+        "baseline_status": "complete",
+        "baseline_source": _SNAPSHOT,
+        "suppress_achievement": False,
+        "manager_exceptions": [],
+        "note": None,
+    } for m in _months(first, end)]
+
+
 def forecast_baselines() -> list[dict]:
     rows = []
     for m in _months(dt.date(2026, 7, 1), dt.date(2027, 6, 1)):
