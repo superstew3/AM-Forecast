@@ -204,11 +204,65 @@ def test_projection_is_reported_separately_from_earned(client):
     assert "not money earned" in notes
 
 def test_projection_scales_the_elapsed_pace(conn):
-    for actual, elapsed, in_quarter, projected in rows(conn, """
-            SELECT actual_income, months_elapsed, months_in_quarter, projected_income
+    """A manager running at X% of pace is projected to finish at X% of target.
+
+    This asserted the old formula -- income times months_in_quarter over
+    months_elapsed -- which assumed every month carried an equal share of the
+    quarter. None do. July is 39% of one manager's quarter and 28% of another's,
+    so multiplying by three overstated the first and understated the second: it
+    projected a bonus for somebody who had MISSED July and none for somebody who
+    had beaten it.
+
+    Scaling the quarter target by the pace achieved carries the shape of the
+    forecast with it, so an uneven quarter projects correctly without anybody
+    having to know it is uneven.
+    """
+    checked = 0
+    for completed, to_date, target, projected in rows(conn, """
+            SELECT actual_income_completed, budget_to_date, budget_target,
+                   projected_income
             FROM v_bonus_quarter
             WHERE financial_year = 2026 AND projected_income IS NOT NULL"""):
-        assert cents(projected) == cents(actual * Decimal(in_quarter) / Decimal(elapsed))
+        assert cents(projected) == cents(completed * target / to_date)
+        checked += 1
+    if not checked:
+        pytest.skip("no quarter is part-way through with a completed month behind it")
+
+
+def test_a_projection_needs_a_completed_month_behind_it(conn):
+    """Null, not nought, when there is nothing to project from.
+
+    A quarter whose first month has not closed, or whose closed month has no
+    transactions imported, has no basis for a projection. Reporting zero there
+    reads as "on course to earn nothing", which is a verdict rather than an
+    absence -- and it is the same conflation of null with zero that made every
+    manager read as well behind while the sales file had simply not arrived.
+    """
+    for completed, projected, bonus in rows(conn, """
+            SELECT actual_income_completed, projected_income, projected_bonus
+            FROM v_bonus_quarter WHERE financial_year = 2026"""):
+        if completed is None:
+            assert projected is None, "projected income without a completed month"
+            assert bonus is None, "projected bonus without a completed month"
+
+
+def test_a_projected_bonus_needs_a_projection_above_target(conn):
+    """Never a bonus for a manager the same view reports as behind.
+
+    The pairing that made the old formula visible: Michael Stewart at 91.5% of
+    pace was projected a bonus, and AnneM Goodchild at 115.8% was projected none.
+    Whatever the arithmetic, those two facts cannot both sit on one row.
+    """
+    for pace_num, pace_den, projected, target, bonus in rows(conn, """
+            SELECT actual_income_completed, budget_to_date, projected_income,
+                   budget_target, projected_bonus
+            FROM v_bonus_quarter
+            WHERE financial_year = 2026 AND projected_bonus IS NOT NULL"""):
+        if bonus > 0:
+            assert projected >= target, \
+                "a bonus projected while the projection is below target"
+            assert pace_num >= pace_den, \
+                "a bonus projected for a manager behind the pace needed"
 
 
 # The words a quarter can be in. A finished quarter has a result; a running one
