@@ -90,14 +90,40 @@ def test_an_unimported_month_is_not_an_empty_one(client):
     nobody earned anything.
     """
     d = client.get("/api/performance").json()
+
+    # Completed months only. For the month still running, "in progress" takes
+    # precedence over "actuals not loaded" -- deliberately, and the view checks it
+    # first: a running month is not scored whether the transactions are in or
+    # not, so its state is the more useful fact. The missing actuals are said in
+    # the note instead, which is asserted separately below.
     unloaded = [m for m in d["months"]
-                if m["actuals_load_state"] == "none" and m["month_state"] != "future"]
+                if m["actuals_load_state"] == "none"
+                and m["month_state"] == "completed"]
     if not unloaded:
-        pytest.skip("every started month has transactions imported")
+        pytest.skip("every completed month has transactions imported")
     for m in unloaded:
         assert m["actual_income"] is None, m
         assert m["status"] == "actuals_not_loaded", m
         assert m["status_note"], "an unavailable figure must say why"
+
+
+def test_a_running_month_says_how_far_its_actuals_go(client):
+    """The month under way is labelled in progress, and explains itself.
+
+    Whether its transactions are loaded, partly loaded or absent, the status stays
+    in_progress -- but the note has to carry the difference, or a reader cannot
+    tell a month with three weeks of income from one with none.
+    """
+    d = client.get("/api/performance").json()
+    running = [m for m in d["months"] if m["month_state"] == "in_progress"]
+    if not running:
+        pytest.skip("no month is under way in this dataset")
+    for m in running:
+        assert m["status"] == "in_progress" or m["status"] in (
+            "missing_forecast", "baseline_unverified"), m
+        if m["status"] == "in_progress":
+            assert m["status_note"], "a running month must say how far its actuals go"
+            assert "in progress" in m["status_note"].lower(), m["status_note"]
 
 
 def test_target_is_the_forecast_plus_growth(client):
