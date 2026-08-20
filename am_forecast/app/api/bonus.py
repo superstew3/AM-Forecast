@@ -113,6 +113,7 @@ class BonusQuarter(BaseModel):
     # ahead of pace read as 43% to 57% under -- the exact fault the reporting
     # rules warn about, sitting on the headline table.
     budget_to_date: Decimal | None = None
+    actual_income_completed: Decimal | None = None
     pace_variance: Decimal | None = None
     pace_achievement: Decimal | None = None
     pace: str | None = None
@@ -135,9 +136,21 @@ def _pace(r: dict) -> tuple[Decimal | None, Decimal | None, str | None]:
     if not r["quarter_started"]:
         return None, None, None
     to_date = _dec(r["budget_to_date"])
-    actual = _dec(r["actual_income"])
-    if to_date <= 0:
+    # Income from COMPLETED months, matched to a target from completed months.
+    # Using the running total here put a part month's income against a whole
+    # month's target and reported nearly every manager as well behind.
+    raw = r.get("actual_income_completed")
+    if to_date <= 0 or raw is None:
+        # No pace rather than nought per cent.
+        #
+        # SUM over no rows is NULL, not zero, and the two mean opposite things: a
+        # completed month whose transactions have not been imported is unknown,
+        # while zero is a real result. Treating the first as the second put every
+        # manager at 0% and "well behind" for the entire stretch where the sales
+        # file had simply not arrived -- the same confusion the model exists to
+        # prevent, arriving through the back door.
         return None, None, None
+    actual = _dec(raw)
     ratio = actual / to_date
     if ratio >= Decimal("1"):
         word = "ahead"

@@ -14,6 +14,9 @@ export type Money = { value: string | number | null; available: boolean; reason?
 export type Ratio = Money;
 
 export interface Meta {
+  /** The month the calendar is in. The banner shows this rather than the stored
+   *  cut-off, which has decided nothing since migration 0020. */
+  current_month?: string | null;
   cut_off_date: string;
   generated_at: string;
   timezone: string;

@@ -171,6 +171,10 @@ class Meta(BaseModel):
     timezone: str = TIMEZONE
     gst_note: str = GST_NOTE
     financial_year: int | None = None
+    # The month the calendar is in. Every page banner showed the stored cut-off,
+    # which has decided nothing since migration 0020 and read "July" throughout
+    # August -- so the one date on every screen was the one date that was wrong.
+    current_month: dt.date | None = None
     notes: list[str] = Field(default_factory=list)
 
 
@@ -213,8 +217,10 @@ def supplied_month_note(financial_year: int) -> list[str]:
 
 
 def meta(financial_year: int | None = None, notes: Iterable[str] = ()) -> Meta:
-    row = fetch_one("SELECT cut_off_date FROM reporting_settings WHERE id = 1")
+    row = fetch_one("""SELECT cut_off_date, reporting_current_month() AS current_month
+                       FROM reporting_settings WHERE id = 1""")
     return Meta(cut_off_date=row["cut_off_date"],
+                current_month=row["current_month"],
                 generated_at=dt.datetime.now(),
                 financial_year=financial_year,
                 notes=list(notes))

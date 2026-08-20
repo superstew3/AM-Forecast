@@ -1,6 +1,7 @@
 import React from "react";
 import {
-  GST_NOTE, Meta, Money, NA, Ratio, isUnavailable, money, percent, reasonFor, tone,
+  GST_NOTE, Meta, Money, NA, Ratio, dateAU, isUnavailable, money, monthAU, percent,
+  reasonFor, tone,
 } from "../lib/api";
 
 /** A value that may be unavailable. Renders N/A with the reason as a tooltip. */
@@ -61,9 +62,19 @@ export function GstBanner({ meta }: { meta?: Meta }) {
   return (
     <div className="gst-banner">
       <strong>{GST_NOTE}</strong>
+      {/* The current month, not the stored cut-off.
+          This read "Reporting cut-off 2026-07-31" on every page, which said two
+          wrong things: that a setting somebody maintains still governs the
+          figures -- it has not since migration 0020 -- and, throughout August,
+          that the system thought it was July. The month comes from the calendar
+          in Melbourne and needs nobody to advance it.
+          Also formatted Australian rather than printing the raw ISO date
+          straight from the payload, while dateAU already existed. */}
       {meta && (
         <span className="gst-meta">
-          Reporting cut-off {meta.cut_off_date} &middot; {meta.timezone}
+          {meta.current_month
+            ? `Reporting ${monthAU(meta.current_month)} \u00b7 ${meta.timezone}`
+            : `As at ${dateAU(meta.cut_off_date)} \u00b7 ${meta.timezone}`}
         </span>
       )}
     </div>
