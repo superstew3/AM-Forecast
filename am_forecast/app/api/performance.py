@@ -88,16 +88,26 @@ def performance(financial_year: int | None = Query(None),
         # Months that began with no target. A routine upload is not allowed to
         # fill these -- only an audited override -- so they are surfaced rather
         # than left to be noticed.
+        # Scoped to the year on screen. Unfiltered, this listed every month in
+        # the database that ever began without a target -- fourteen FY2025-26
+        # months on an FY2026-27 page, none of them about the year being read.
         "missing_forecast": fetch_all("""
             SELECT month, month_state, override_pending
-            FROM v_missing_forecast_month ORDER BY month"""),
+            FROM v_missing_forecast_month
+            WHERE au_financial_year(month) = %(fy)s
+            ORDER BY month""", {"fy": financial_year}),
         # Which months have transactions imported, so "nobody earned anything"
         # and "nobody has uploaded it" can be told apart on screen.
+        # Months that have STARTED only. A month still to come has no
+        # transactions by definition, so reporting it as unloaded is noise --
+        # eleven rows of it, saying nothing, burying the two months where the
+        # gap is real and actionable.
         "coverage": fetch_all("""
             SELECT DISTINCT m.month, actual_load_state(m.month) AS load_state,
                    actual_loaded_to(m.month) AS loaded_to
             FROM (SELECT DISTINCT month FROM v_month_performance
-                  WHERE financial_year = %(fy)s) m
+                  WHERE financial_year = %(fy)s
+                    AND month <= reporting_current_month()) m
             ORDER BY m.month""", {"fy": financial_year}),
         # Baselines still on the pre-associate basis. A month holding one is
         # excluded from achievement and bonus until it is reconstructed.

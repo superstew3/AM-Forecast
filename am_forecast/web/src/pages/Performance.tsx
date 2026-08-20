@@ -127,14 +127,18 @@ export default function Performance() {
         d.coverage.some((c: any) => c.load_state !== "full")) && (
         <Panel title="Worth knowing before reading the figures">
           <ul className="advisories">
-            {d.missing_forecast.map((m: any) => (
+            {d.missing_forecast.slice(0, 6).map((m: any) => (
               <li key={`mf-${m.month}`} className="advisory advisory-warn">
                 <strong>{monthAU(m.month)}</strong> began with no target.
                 A routine upload cannot fill it — that needs an audited override.
                 {m.override_pending && " An override is already open for it."}
               </li>
             ))}
-            {d.coverage.filter((c: any) => c.load_state !== "full").map((c: any) => (
+            {/* Capped. An advisory block is only useful while it is short: at
+                twenty-seven rows it became the page, and the two entries that
+                mattered were indistinguishable from the twenty-five that did
+                not. The count is stated rather than the rest silently dropped. */}
+            {d.coverage.filter((c: any) => c.load_state !== "full").slice(0, 6).map((c: any) => (
               <li key={`cv-${c.month}`} className="advisory">
                 <strong>{monthAU(c.month)}</strong>{" "}
                 {c.load_state === "none"
@@ -152,6 +156,15 @@ export default function Performance() {
               </li>
             ))}
           </ul>
+          {(d.missing_forecast.length > 6 ||
+            d.coverage.filter((c: any) => c.load_state !== "full").length > 6) && (
+            <p className="months-note">
+              Showing the first few. {d.missing_forecast.length} months began
+              without a target and{" "}
+              {d.coverage.filter((c: any) => c.load_state !== "full").length} are
+              missing transactions.
+            </p>
+          )}
         </Panel>
       )}
 
