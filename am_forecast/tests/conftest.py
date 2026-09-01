@@ -269,34 +269,49 @@ def closed_month(conn):
     dataset whose only month is still open.
 
     Rather than weaken those assertions to whatever the current sample happens
-    to support — which would quietly stop testing the rule — this moves the
-    reporting cut-off to the end of the earliest month holding actuals, and puts
-    it back afterwards. The rule stays fully tested on any dataset.
+    to support -- which would quietly stop testing the rule -- this moves the
+    CLOCK forward so the earliest month holding actuals has definitively closed,
+    and puts it back afterwards.
+
+    It moved the reporting cut-off until now. That stopped working the moment the
+    endpoints were cut over to the calendar: rolling the cut-off back no longer
+    changed what anything considered current, so four tests were comparing a
+    full-year total against a boundary nothing observed. The fixture was
+    simulating a mechanism that had been retired underneath it.
+
+    Overriding reporting_current_month() is the honest replacement -- it is the
+    one thing every view, every endpoint and the importer all consult, so moving
+    it moves the whole system together. The definition is restored afterwards,
+    and it is committed rather than held in a transaction because the API runs on
+    its own connection and would not otherwise see it.
     """
     with conn.cursor() as cur:
-        cur.execute("SELECT cut_off_date FROM reporting_settings WHERE id=1")
-        original = cur.fetchone()[0]
+        cur.execute("SELECT pg_get_functiondef('reporting_current_month'::regproc)")
+        original_def = cur.fetchone()[0]
         cur.execute("""SELECT MIN(date_trunc('month', transaction_date))::date
                        FROM sales_transaction WHERE NOT is_excluded""")
         first = cur.fetchone()[0]
         if first is None:
             pytest.skip("no actuals loaded")
-        # End of that month.
-        cur.execute("SELECT (%s::date + INTERVAL '1 month - 1 day')::date", (first,))
+        # Stand in the month after it, so that month is unambiguously complete.
+        cur.execute("SELECT (%s::date + INTERVAL '1 month')::date", (first,))
+        pretend_now = cur.fetchone()[0]
+        cur.execute("""CREATE OR REPLACE FUNCTION reporting_current_month()
+                       RETURNS date LANGUAGE sql STABLE AS $fixture$
+                           SELECT %s::date $fixture$""", (pretend_now,))
+        cur.execute("SELECT (%s::date - INTERVAL '1 day')::date", (pretend_now,))
         month_end = cur.fetchone()[0]
-        cur.execute("UPDATE reporting_settings SET cut_off_date=%s WHERE id=1",
-                    (month_end,))
         cur.execute("""SELECT au_financial_year(%s::date), au_quarter(%s::date)""",
                     (month_end, month_end))
         fy, quarter = cur.fetchone()
     conn.commit()
 
     yield {"month": first, "month_iso": first.isoformat(), "cut_off": month_end,
+           "current_month": pretend_now,
            "financial_year": fy, "financial_quarter": quarter}
 
     with conn.cursor() as cur:
-        cur.execute("UPDATE reporting_settings SET cut_off_date=%s WHERE id=1",
-                    (original,))
+        cur.execute(original_def)
     conn.commit()
 
 

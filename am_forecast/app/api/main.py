@@ -182,8 +182,12 @@ def base_position(user: User = Depends(current_user)):
     Exposed so the interface can show, and tests can assert, that the production
     position is the supplied base state and not a leftover test scenario.
     """
-    fy = fetch_one("""SELECT au_financial_year(cut_off_date) AS fy
-                      FROM reporting_settings WHERE id = 1""")["fy"]
+    # From the calendar, like everything else. This was the seventh site and the
+    # one I missed: my own check looked only for date_trunc on the cut-off, while
+    # this derives a FINANCIAL YEAR from it. The test written in the same batch
+    # checks both patterns and caught it, which is the argument for writing the
+    # guard stricter than the sweep that precedes it.
+    fy = fetch_one("SELECT au_financial_year(reporting_current_month()) AS fy")["fy"]
     live = fetch_one("""
         SELECT (SELECT SUM(forecast_contribution) FROM original_forecast
                  WHERE financial_year = %(fy)s) AS original_renewal_forecast,
