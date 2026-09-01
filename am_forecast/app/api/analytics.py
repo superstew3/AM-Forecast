@@ -27,20 +27,26 @@ def _fy_months(fy: int) -> list[dt.date]:
     return [dt.date(fy + (7 + i - 1) // 12, (7 + i - 1) % 12 + 1, 1) for i in range(12)]
 
 
-def _cut_month() -> dt.date:
-    """The last COMPLETED month.
+def _boundaries() -> tuple[dt.date, dt.date]:
+    """The two month boundaries this module needs, named apart.
 
-    This module compares a year against the one before it. Like-for-like means
-    both sides cut at the same point, and the month under way is only partly
-    there -- including it would put three weeks of this August against a whole
-    August last year and call the difference performance.
+    One variable was doing both jobs here, which is how the same fault appeared
+    twice: as a month that would not show its income, and as a comparison that
+    was not like for like.
 
-    It read the stored cut-off until batch 35, then briefly the current month,
-    which counted an unfinished month as finished. Neither was right: the
-    comparison needs the month that has ended.
+    started -- has the month begun? The month under way HAS begun and its income
+    has been earned, so it belongs in the grid and in year-to-date. Excluding it
+    is what made an accepted August upload invisible.
+
+    judged -- has the month ended? A comparison against last year must cut both
+    sides at the same point, and the month under way is only partly there.
+    Including it puts three weeks of this August against a whole August last year
+    and calls the difference growth.
     """
-    return fetch_one("""SELECT (reporting_current_month()
-                                - INTERVAL '1 month')::date AS m""")["m"]
+    row = fetch_one("""SELECT reporting_current_month() AS started,
+                              (reporting_current_month()
+                               - INTERVAL '1 month')::date AS judged""")
+    return row["started"], row["judged"]
 
 
 def _pct_change(now, before) -> Decimal | None:
@@ -97,7 +103,7 @@ def year_over_year(financial_year: int | None = Query(None), manager: str | None
                    user=Depends(current_user)):
     """This year against last, month by month, with the difference explained."""
     financial_year = financial_year or current_financial_year()
-    cut = _cut_month()
+    cut, judged = _boundaries()
     months = _fy_months(financial_year)
     params = {"fy": financial_year, "py": financial_year - 1, "mgr": manager}
     where = " AND canonical_manager = %(mgr)s" if manager else ""
@@ -141,7 +147,10 @@ def year_over_year(financial_year: int | None = Query(None), manager: str | None
             prior_year_actual=prior.get(m),
             variance_to_budget=var, achievement=ach))
 
-    ytd = [m for m in months if m <= cut]
+    # Completed months on both sides, so a part month is never compared with a
+    # whole one. The grid above uses the other boundary and shows the month under
+    # way; this is the figure that gets compared, and it stops a month earlier.
+    ytd = [m for m in months if m <= judged]
     ytd_actual = sum((actual[m]["net"] for m in ytd if m in actual), Decimal(0)) or None
     ytd_prior = sum((prior[m] for m in ytd if m in prior), Decimal(0)) or None
     ytd_budget = sum((budget[m] for m in ytd if m in budget), Decimal(0)) or None
@@ -185,7 +194,7 @@ def year_over_year(financial_year: int | None = Query(None), manager: str | None
         FROM now FULL OUTER JOIN was ON was.canonical_manager = now.canonical_manager
         ORDER BY change DESC""",
         {"fy": financial_year, "py": financial_year - 1,
-         "py_cut": dt.date(cut.year - 1, cut.month, 1)})
+         "py_cut": dt.date(judged.year - 1, judged.month, 1)})
 
     by_type = fetch_all("""
         WITH now AS (SELECT business_classification, SUM(actual_income) AS v
@@ -204,7 +213,7 @@ def year_over_year(financial_year: int | None = Query(None), manager: str | None
           ON was.business_classification = now.business_classification
         ORDER BY change DESC""",
         {"fy": financial_year, "py": financial_year - 1,
-         "py_cut": dt.date(cut.year - 1, cut.month, 1)})
+         "py_cut": dt.date(judged.year - 1, judged.month, 1)})
 
     return YearOverYear(
         financial_year=financial_year,
@@ -248,7 +257,9 @@ def manager_matrix(financial_year: int | None = Query(None),
     unreadable and invites mis-reading one for another.
     """
     financial_year = financial_year or current_financial_year()
-    cut = _cut_month()
+    # The grid shows income, so it uses the started boundary: a month under way
+    # with transactions imported must display them.
+    cut, _judged = _boundaries()
     months = _fy_months(financial_year)
     params = {"fy": financial_year}
 

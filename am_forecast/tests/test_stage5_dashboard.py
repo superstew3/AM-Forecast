@@ -64,12 +64,23 @@ def test_01_base_operating_position_reconciles(client, conn):
     # manipulated year with no forecast data. A .get() default that hides a
     # rename is worse than a KeyError, which would at least have said so.
     if not d["checks"].get("last_completed_month_is_loaded", True):
-        covered = scalar(conn, """
-            SELECT actual_load_state((SELECT date_trunc('month', cut_off_date)::date
-                                      FROM reporting_settings WHERE id = 1))""")
-        if covered != "full":
-            pytest.skip(f"the cut-off month is {covered} in this dataset, so base "
-                        f"state cannot be asserted")
+        # Ask the question the flag just answered.
+        #
+        # This read the flag and then went and checked something else: the load
+        # state of the CUT-OFF month, which is pinned at July while the last
+        # completed month is August. July was full, so the guard did not fire,
+        # and the test asserted base state against a position the endpoint had
+        # just said was not base state.
+        #
+        # A guard that checks a different condition from the one it is guarding
+        # is worse than no guard: it looks like the case was considered.
+        last_done, covered = rows_of(conn, """
+            SELECT m, actual_load_state(m) FROM (
+                SELECT (reporting_current_month() - INTERVAL '1 month')::date AS m
+            ) x""")[0]
+        pytest.skip(f"{last_done:%B %Y} is the last completed month and its "
+                    f"transactions are {covered} in this dataset, so base state "
+                    f"cannot be asserted")
     # Internal consistency rather than four figures pinned to one export: the
     # relationships must hold for any dataset, and pinned figures all became
     # wrong together the moment new data arrived.
@@ -274,8 +285,10 @@ def test_11_non_ranked_managers_are_in_totals_but_not_rankings(client, conn):
     Named after Anastasia K originally, which tied it to one roster. The rule is
     that a manager excluded from rankings still counts towards the business.
     """
-    fy = scalar(conn, """SELECT au_financial_year(cut_off_date)
-                         FROM reporting_settings WHERE id = 1""")
+    # The year under test, from the calendar. Derived from the stored cut-off it
+    # would drift away from the year every endpoint actually reports on, and the
+    # test would compare rosters for two different years without saying so.
+    fy = scalar(conn, "SELECT au_financial_year(reporting_current_month())")
     ranked = {r["canonical_manager"] for r in
               client.get(f"/api/managers?period=year&financial_year={fy}"
                          ).json()["items"]}
@@ -678,11 +691,17 @@ def test_manager_matrix_totals_match_the_views(client, conn, closed_month):
     # future, so the view must be scoped the same way -- the closed_month
     # fixture rolls the cut-off back, and comparing a cut-off-limited total
     # against a whole-year sum was measuring two different periods.
+    # Scoped to the boundary the matrix uses, which is the calendar's.
+    #
+    # This filtered by the stored cut-off, so it compared a total the endpoint
+    # scopes one way against a sum scoped another -- and only agreed by accident
+    # while the cut-off happened to sit where the calendar did. The matrix shows
+    # months that have STARTED, including the one under way, because its income
+    # has been earned.
     assert cents(d["grand_total"]) == cents(scalar(conn, """
         SELECT COALESCE(SUM(net_actual_income), 0) FROM v_actual_month
         WHERE financial_year = %s
-          AND period_month <= (SELECT date_trunc('month', cut_off_date)::date
-                               FROM reporting_settings WHERE id = 1)""", (fy,)))
+          AND period_month <= reporting_current_month()""", (fy,)))
     for r in d["rows"]:
         row_sum = sum(Decimal(str(c["value"])) for c in r["cells"]
                       if c["value"] is not None)

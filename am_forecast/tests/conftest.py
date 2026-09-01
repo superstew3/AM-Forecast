@@ -288,11 +288,31 @@ def closed_month(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT pg_get_functiondef('reporting_current_month'::regproc)")
         original_def = cur.fetchone()[0]
-        cur.execute("""SELECT MIN(date_trunc('month', transaction_date))::date
-                       FROM sales_transaction WHERE NOT is_excluded""")
-        first = cur.fetchone()[0]
-        if first is None:
-            pytest.skip("no actuals loaded")
+        # The anchor needs ROOM AFTER IT, not just actuals in it.
+        #
+        # Taking the earliest month with transactions put the pretend "now" on
+        # June 2025 -- the last month of FY2024 -- so there was no month left in
+        # that financial year to assert was future, and the test that checks
+        # future months had nothing to check. It failed on the shape of the
+        # dataset rather than on any behaviour.
+        #
+        # So: the earliest month that has actuals AND leaves at least two more
+        # months in its own financial year. That guarantees one completed month,
+        # one under way, and one still to come, all in the year under test --
+        # which is exactly what these tests need to distinguish the three states.
+        cur.execute("""
+            SELECT m FROM (
+                SELECT DISTINCT date_trunc('month', transaction_date)::date AS m
+                FROM sales_transaction WHERE NOT is_excluded) months
+            WHERE au_financial_year((m + INTERVAL '2 months')::date)
+                  = au_financial_year(m)
+            ORDER BY m LIMIT 1""")
+        row = cur.fetchone()
+        if row is None:
+            pytest.skip("no month with actuals leaves two more months in its "
+                        "financial year, so the three month states cannot all "
+                        "be exercised on this dataset")
+        first = row[0]
         # Stand in the month after it, so that month is unambiguously complete.
         cur.execute("SELECT (%s::date + INTERVAL '1 month')::date", (first,))
         pretend_now = cur.fetchone()[0]
