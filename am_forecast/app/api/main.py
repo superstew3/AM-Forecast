@@ -240,9 +240,13 @@ def base_position(user: User = Depends(current_user)):
         # is recorded per batch and needs no proxy. A month counts as complete
         # only when every day of it has been imported -- so a file ending on the
         # 11th still correctly reports its month incomplete.
-        "cut_off_month_is_complete": fetch_one("""
-            SELECT actual_load_state((SELECT date_trunc('month', cut_off_date)::date
-                                      FROM reporting_settings WHERE id = 1)) = 'full'
+        # Renamed and re-pointed. It checked whether the CUT-OFF month was fully
+        # loaded, which stopped meaning anything once the calendar took over -- a
+        # health check answering a question nobody was asking. The useful one is
+        # whether the last month that actually finished has all its transactions.
+        "last_completed_month_is_loaded": fetch_one("""
+            SELECT actual_load_state(
+                       (reporting_current_month() - INTERVAL '1 month')::date) = 'full'
                    OR NOT EXISTS (SELECT 1 FROM sales_transaction WHERE NOT is_excluded)
                    AS ok""")["ok"],
     }

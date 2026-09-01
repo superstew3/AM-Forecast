@@ -129,8 +129,17 @@ class ManagerResponse(BaseModel):
 
 
 _MANAGER_SQL = """
-WITH cut AS (SELECT date_trunc('month', cut_off_date)::date AS cut_month
-             FROM reporting_settings WHERE id=1),
+-- The month boundary comes from the calendar, not the stored cut-off.
+--
+-- Migration 0020 moved every VIEW onto reporting_current_month(). These SQL
+-- fragments and Python filters in the API were missed, so the two disagreed: the
+-- views knew August had started and the endpoints did not.
+--
+-- The effect was that an accepted sales file containing August simply did not
+-- appear. The import worked, the rows were in sales_transaction, and every
+-- reporting surface dropped them because period_month > cut_month. Nothing
+-- errored, and nothing said why.
+WITH cut AS (SELECT reporting_current_month() AS cut_month),
 act AS (
     SELECT canonical_manager, financial_year, financial_quarter, period_month,
            positive_actual_income, absolute_return_income, net_actual_income,
@@ -270,8 +279,17 @@ def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"
         sql += " AND m.include_in_rankings"
     rows = fetch_all(sql, params)
 
-    cut = fetch_one("""SELECT date_trunc('month', cut_off_date)::date AS m
-                       FROM reporting_settings WHERE id=1""")["m"]
+    # THE one that hid an accepted upload.
+    #
+    # This drops every row after the boundary, so with the stored cut-off at
+    # 31 July an August sales file was imported, accepted, and then filtered out
+    # of the account-manager figures entirely. The rows were in the database the
+    # whole time. Nothing errored; the numbers simply did not move.
+    #
+    # The calendar knows August has started. The setting did not, and nobody had
+    # any reason to think a reporting setting still governed whether an import
+    # showed up.
+    cut = fetch_one("SELECT reporting_current_month() AS m")["m"]
     if period == "ytd":
         rows = [r for r in rows if r["period_month"] and r["period_month"] <= cut]
 

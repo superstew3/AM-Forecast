@@ -48,10 +48,14 @@ def periods(user=Depends(current_user)):
     The interface builds every year selector from this. Nothing is hardcoded, so
     the app rolls into a new financial year on its own.
     """
+    # The year selector on every page is built from this. Deriving it from the
+    # stored cut-off meant the app would have kept offering last financial year
+    # as "current" until somebody advanced a setting -- and the cut-off has
+    # decided nothing since migration 0020.
     cut = fetch_one("""SELECT cut_off_date,
-                              au_financial_year(cut_off_date) AS current_fy,
-                              au_quarter(cut_off_date) AS current_quarter,
-                              date_trunc('month', cut_off_date)::date AS cut_month
+                              au_financial_year(reporting_current_month()) AS current_fy,
+                              au_quarter(reporting_current_month()) AS current_quarter,
+                              reporting_current_month() AS cut_month
                        FROM reporting_settings WHERE id = 1""")
 
     years = fetch_all("""

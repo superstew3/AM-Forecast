@@ -47,8 +47,11 @@ def review_queue(kind: str = Query("actionable",
                                    pattern="^(actionable|timing|out_of_scope|all)$"),
                  limit: int = Query(100, le=1000), offset: int = 0,
                  user=Depends(current_user)):
-    cut = fetch_one("""SELECT date_trunc('month', cut_off_date)::date AS m
-                       FROM reporting_settings WHERE id=1""")["m"]
+    # Calendar, not the stored cut-off: a candidate is a timing difference
+    # relative to the month we are actually in. Reading the setting meant the
+    # review queue classified against a boundary the rest of the system had
+    # stopped using.
+    cut = fetch_one("SELECT reporting_current_month() AS m")["m"]
     if kind == "actionable":
         where = "WHERE status='pending' AND reason = ANY(%(reasons)s)"
         params = {"reasons": list(ACTIONABLE)}

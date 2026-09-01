@@ -28,8 +28,13 @@ def _fy_months(fy: int) -> list[dt.date]:
 
 
 def _cut_month() -> dt.date:
-    return fetch_one("""SELECT date_trunc('month', cut_off_date)::date AS m
-                        FROM reporting_settings WHERE id = 1""")["m"]
+    """The last month that counts as started, from the calendar.
+
+    Read the stored cut-off until now, which meant this module disagreed with
+    every view it sat beside after migration 0020 -- and quietly excluded a month
+    whose sales had already been imported.
+    """
+    return fetch_one("SELECT reporting_current_month() AS m")["m"]
 
 
 def _pct_change(now, before) -> Decimal | None:

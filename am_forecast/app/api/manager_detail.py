@@ -142,8 +142,10 @@ def manager_detail(manager: str, financial_year: int | None = Query(None),
     if who is None:
         raise HTTPException(404, f"unknown manager '{manager}'")
 
-    cut_month = fetch_one("""SELECT date_trunc('month', cut_off_date)::date AS m
-                             FROM reporting_settings WHERE id = 1""")["m"]
+    # From the calendar, as the views do. Reading the stored cut-off here meant a
+    # manager's month-by-month grid blanked every month after it, including one
+    # with transactions already loaded.
+    cut_month = fetch_one("SELECT reporting_current_month() AS m")["m"]
     months = _fy_months(financial_year)
     params = {"m": manager, "fy": financial_year, "py": financial_year - 1}
 
