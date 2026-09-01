@@ -196,7 +196,8 @@ LEFT JOIN forecast_baseline fb ON fb.forecast_month = base.period_month
 """
 
 
-def _aggregate(rows: list[dict], period: str, completed_month) -> list[dict]:
+def _aggregate(rows: list[dict], period: str, completed_month,
+               started_month) -> list[dict]:
     """Roll monthly rows up to quarter, year-to-date or full year.
 
     Sums are over NULL-tolerant addition: a NULL component leaves the total NULL
@@ -220,11 +221,29 @@ def _aggregate(rows: list[dict], period: str, completed_month) -> list[dict]:
             "baseline_note": r.get("baseline_note"),
             "_any_baseline": False, "_all_baseline": True,
         })
-        for field in ("original_forecast", "latest_forecast", "positive_actual_income",
-                      "absolute_return_income", "net_actual_income",
-                      "actual_new_business", "new_business_growth_target",
-                      "total_budget"):
+        # Forecast and budget cover the WHOLE period, including months still to
+        # come -- a full-year budget is a full year. Actual income covers only
+        # months that have STARTED, because a month that has not begun cannot
+        # have produced any.
+        #
+        # Summing both the same way let a quarter labelled "not started" report
+        # income anyway. The label and the figure were computed by different
+        # logic, so nothing made them agree, and one row could assert both at
+        # once. In production the sums happened to match because a future month
+        # holds no transactions -- the contradiction only became visible against
+        # a dataset with data beyond the boundary, which is precisely the case
+        # nobody would think to check.
+        started_here = bool(r["period_month"]) and r["period_month"] <= started_month
+        for field in ("original_forecast", "latest_forecast",
+                      "new_business_growth_target", "total_budget"):
             v = r.get(field)
+            if v is not None:
+                acc[field] = (acc.get(field) or 0) + v
+            else:
+                acc.setdefault(field, None)
+        for field in ("positive_actual_income", "absolute_return_income",
+                      "net_actual_income", "actual_new_business"):
+            v = r.get(field) if started_here else None
             if v is not None:
                 acc[field] = (acc.get(field) or 0) + v
             else:
@@ -315,7 +334,7 @@ def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"
         rows = [r for r in rows if r["period_month"] and r["period_month"] <= cut]
 
     grain = "month" if period == "month" else ("quarter" if period == "quarter" else "year")
-    aggregated = _aggregate(rows, grain, completed)
+    aggregated = _aggregate(rows, grain, completed, cut)
 
     outlook = {(r["canonical_manager"], r["financial_quarter"]): r
                for r in fetch_all("""SELECT canonical_manager, financial_quarter,

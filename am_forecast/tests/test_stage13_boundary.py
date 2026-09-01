@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+from decimal import Decimal
 
 import pytest
 
@@ -139,3 +140,54 @@ def test_year_to_date_includes_the_month_under_way(client, conn):
     assert total > completed_only - 0.01, (
         "year to date excludes the month under way, so an import into the "
         "current month would not be visible")
+
+
+def test_a_period_that_has_not_started_reports_no_income(client, conn):
+    """The label and the figure must agree, at every grain.
+
+    has_started and the income sum were computed by different logic and nothing
+    made them consistent, so one row could say a quarter had not begun and
+    report $107,244.15 of income in the same breath.
+
+    In production the two happened to agree, because a month still to come holds
+    no transactions -- the contradiction only appeared against a dataset with
+    data beyond the boundary. That is the case nobody thinks to check, and the
+    reason to assert the rule rather than trust the arithmetic.
+    """
+    fy = scalar(conn, "SELECT au_financial_year(reporting_current_month())")
+    for grain in ("month", "quarter", "year"):
+        d = client.get(f"/api/managers?period={grain}&financial_year={fy}"
+                       "&include_non_ranked=true").json()
+        for row in d["items"]:
+            if row.get("has_started"):
+                continue
+            for field in ("net_actual_income", "positive_actual_income",
+                          "absolute_return_income", "actual_new_business"):
+                v = row.get(field)
+                assert v is None or Decimal(str(v)) == 0, (
+                    f"{grain}: {row['canonical_manager']} has not started but "
+                    f"reports {field} = {v}")
+
+
+def test_budget_still_covers_the_whole_period(client, conn):
+    """The other half of the rule, so the fix does not overreach.
+
+    Actual income is limited to months that have started. Budget and forecast are
+    NOT: a full-year budget is a full year, including the months still to come.
+    Trimming those would understate every target and make achievement look better
+    than it is, which is a worse error than the one being fixed.
+    """
+    fy = scalar(conn, "SELECT au_financial_year(reporting_current_month())")
+    d = client.get(f"/api/managers?period=year&financial_year={fy}").json()
+    for row in d["items"]:
+        whole = scalar(conn, """
+            SELECT COALESCE(SUM(total_budget), 0) FROM v_monthly_budget
+            WHERE canonical_manager = %s AND financial_year = %s""",
+            (row["canonical_manager"], fy))
+        if not whole:
+            continue
+        reported = row.get("total_budget")
+        assert reported is not None, row["canonical_manager"]
+        assert abs(Decimal(str(reported)) - Decimal(str(whole))) < Decimal("0.05"), (
+            f"{row['canonical_manager']}: the year's budget is trimmed to the "
+            f"months that have started; it should be the whole year")
