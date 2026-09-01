@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from .core import (
+    current_month, last_completed_month,
     supplied_month_note,
     current_financial_year,
     GST_NOTE, Filters, Meta, Money, Page, Ratio, columns_of, current_user,
@@ -195,7 +196,7 @@ LEFT JOIN forecast_baseline fb ON fb.forecast_month = base.period_month
 """
 
 
-def _aggregate(rows: list[dict], period: str, cut_month) -> list[dict]:
+def _aggregate(rows: list[dict], period: str, completed_month) -> list[dict]:
     """Roll monthly rows up to quarter, year-to-date or full year.
 
     Sums are over NULL-tolerant addition: a NULL component leaves the total NULL
@@ -234,7 +235,17 @@ def _aggregate(rows: list[dict], period: str, cut_month) -> list[dict]:
         # not three. Comparing July actuals with a whole-quarter budget reported
         # every manager at roughly a third of target, which is arithmetic, not
         # performance.
-        if r["period_month"] and r["period_month"] <= cut_month:
+        # COMPLETED months only for anything that gets judged.
+        #
+        # budget_to_date, forecast_to_date and months_elapsed are the
+        # denominators of achievement. Counting the month under way among them
+        # puts a part month's income against a whole month's target -- which on
+        # the bonus tracker reported nearly every manager as well behind while
+        # three of them were ahead, and is fixed there by migration 0022.
+        #
+        # Income itself is NOT filtered here: it is shown for the month under
+        # way, because it has been earned. Shown, not scored.
+        if r["period_month"] and r["period_month"] <= completed_month:
             for field, dest in (("total_budget", "budget_to_date"),
                                 ("original_forecast", "forecast_to_date")):
                 v = r.get(field)
@@ -289,12 +300,22 @@ def managers(period: str = Query("quarter", pattern="^(month|quarter|ytd|year)$"
     # The calendar knows August has started. The setting did not, and nobody had
     # any reason to think a reporting setting still governed whether an import
     # showed up.
-    cut = fetch_one("SELECT reporting_current_month() AS m")["m"]
+    # Two boundaries, deliberately.
+    #
+    # Year to date INCLUDES the month under way: its income has been earned and
+    # belongs on the page the day it is imported. Filtering it out is what made
+    # an accepted August upload invisible.
+    #
+    # Budget and forecast to date exclude it, because those are what income is
+    # measured against, and a whole month's target against a part month's income
+    # is not a result. Same rule as migration 0022 on the bonus tracker.
+    cut = current_month()
+    completed = last_completed_month()
     if period == "ytd":
         rows = [r for r in rows if r["period_month"] and r["period_month"] <= cut]
 
     grain = "month" if period == "month" else ("quarter" if period == "quarter" else "year")
-    aggregated = _aggregate(rows, grain, cut)
+    aggregated = _aggregate(rows, grain, completed)
 
     outlook = {(r["canonical_manager"], r["financial_quarter"]): r
                for r in fetch_all("""SELECT canonical_manager, financial_quarter,

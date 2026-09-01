@@ -59,7 +59,11 @@ def test_01_base_operating_position_reconciles(client, conn):
     # A sample covering only part of a later month leaves the cut-off month with
     # no transactions at all, and the flag is then correctly false -- a dataset
     # limitation, not a fault, so it skips with the reason rather than failing.
-    if not d["checks"].get("cut_off_month_is_complete", True):
+    # Renamed in batch 35. The old key defaulted to True when absent, so this
+    # guard silently stopped firing and the test asserted against a fixture-
+    # manipulated year with no forecast data. A .get() default that hides a
+    # rename is worse than a KeyError, which would at least have said so.
+    if not d["checks"].get("last_completed_month_is_loaded", True):
         covered = scalar(conn, """
             SELECT actual_load_state((SELECT date_trunc('month', cut_off_date)::date
                                       FROM reporting_settings WHERE id = 1))""")
@@ -537,10 +541,23 @@ def test_future_months_are_not_reported_as_unavailable(client, conn, closed_mont
     d = client.get(f"/api/managers/Michael%20Stewart/detail?financial_year={fy}").json()
     statuses = dict(zip(d["months"], d["month_status"]))
     assert statuses[closed_month["month_iso"]] == "completed"
-    later = [m for m in d["months"] if m > closed_month["month_iso"]]
+
+    # Three states, not two.
+    #
+    # This asserted that every month after the closed one was "future", which was
+    # true while a single stored cut-off drew one line between past and future.
+    # The calendar draws two: months before this one have finished, this one is
+    # under way, and only the ones after it have not started. The month under way
+    # is precisely where income must still be shown, so calling it future would
+    # blank the figures somebody uploaded this morning.
+    now_iso = closed_month["current_month"].isoformat()
+    later = [m for m in d["months"] if m > now_iso]
     not_later = [m for m in d["months"] if m <= closed_month["month_iso"]]
-    assert later
+    assert later, "the dataset has no month after the one under way"
     assert {statuses[m] for m in later} == {"future"}
+    if now_iso in statuses:
+        assert statuses[now_iso] != "future", \
+            "the month under way is not future; its income has been earned"
 
     net = next(r for r in d["rows"] if r["label"] == "Net Actual Income")
     by_month = {c["month"]: c for c in net["cells"]}

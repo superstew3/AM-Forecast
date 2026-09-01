@@ -28,13 +28,19 @@ def _fy_months(fy: int) -> list[dt.date]:
 
 
 def _cut_month() -> dt.date:
-    """The last month that counts as started, from the calendar.
+    """The last COMPLETED month.
 
-    Read the stored cut-off until now, which meant this module disagreed with
-    every view it sat beside after migration 0020 -- and quietly excluded a month
-    whose sales had already been imported.
+    This module compares a year against the one before it. Like-for-like means
+    both sides cut at the same point, and the month under way is only partly
+    there -- including it would put three weeks of this August against a whole
+    August last year and call the difference performance.
+
+    It read the stored cut-off until batch 35, then briefly the current month,
+    which counted an unfinished month as finished. Neither was right: the
+    comparison needs the month that has ended.
     """
-    return fetch_one("SELECT reporting_current_month() AS m")["m"]
+    return fetch_one("""SELECT (reporting_current_month()
+                                - INTERVAL '1 month')::date AS m""")["m"]
 
 
 def _pct_change(now, before) -> Decimal | None:

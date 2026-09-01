@@ -178,6 +178,31 @@ class Meta(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+def current_month() -> dt.date:
+    """The month under way, in Melbourne."""
+    return fetch_one("SELECT reporting_current_month() AS m")["m"]
+
+
+def last_completed_month() -> dt.date:
+    """The most recent month that has actually finished.
+
+    Two different boundaries, and collapsing them into one is how August went
+    missing and then how it came back wrong.
+
+    "Has this month started?" governs whether income is shown. August has
+    started, so August income belongs on the page the day it is imported.
+
+    "Has this month finished?" governs whether anything is JUDGED -- a
+    like-for-like comparison with last year, a budget-to-date, an achievement
+    percentage. A part month measured against a whole month's target is the
+    fault that has recurred through this system more than any other.
+
+    The stored cut-off used to answer both, badly. These answer one each.
+    """
+    return fetch_one("""SELECT (reporting_current_month()
+                                - INTERVAL '1 month')::date AS m""")["m"]
+
+
 def current_financial_year() -> int:
     """The financial year we are actually in, from the calendar.
 
