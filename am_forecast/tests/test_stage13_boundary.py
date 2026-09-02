@@ -39,6 +39,26 @@ def client(request):
         yield c
 
 
+def amount(field) -> Decimal | None:
+    """Pull the number out of a Money field.
+
+    Every monetary field in these responses is a Money object --
+    {"value": "69049.90", "available": true, "reason": null} -- not a bare
+    number. `value` of None means genuinely unavailable and must never be read
+    as zero, which is the whole reason for the wrapper.
+
+    I wrote these tests against bare numbers twice, from memory rather than from
+    the model, and they blew up on Decimal("{'value': ...}"). Reading the shape
+    in one place means getting it wrong once at most.
+    """
+    if field is None:
+        return None
+    if isinstance(field, dict):
+        v = field.get("value")
+        return None if v is None else Decimal(str(v))
+    return Decimal(str(field))
+
+
 def scalar(conn, sql, params=None):
     with conn.cursor() as cur:
         cur.execute(sql, params or ())
@@ -132,7 +152,11 @@ def test_year_to_date_includes_the_month_under_way(client, conn):
     fy = scalar(conn, "SELECT au_financial_year(%s)", (current,))
     ytd = client.get(f"/api/managers?period=ytd&financial_year={fy}").json()
     assert ytd["items"], "year to date returned nothing"
-    total = sum(float(r.get("net_actual_income") or 0) for r in ytd["items"])
+    # Unwrapped, like the rest. This passed only because it skips while the
+    # month under way has no transactions -- float() on a Money dict raises, so
+    # it would have failed the moment the data it is testing for arrived. A test
+    # that breaks when its subject appears is worse than no test.
+    total = sum(float(amount(r.get("net_actual_income")) or 0) for r in ytd["items"])
     completed_only = float(scalar(conn, """
         SELECT COALESCE(SUM(net_actual_income), 0) FROM v_actual_month
         WHERE financial_year = %s AND period_month < reporting_current_month()""",
@@ -161,10 +185,18 @@ def test_a_period_that_has_not_started_reports_no_income(client, conn):
         for row in d["items"]:
             if row.get("has_started"):
                 continue
+            # The names as the response model declares them. I had
+            # "absolute_return_income", which this endpoint calls
+            # "return_income" -- .get() returned None and the assertion passed
+            # vacuously, so a wrong field name here would have been a test that
+            # checked nothing while looking like it checked something.
             for field in ("net_actual_income", "positive_actual_income",
-                          "absolute_return_income", "actual_new_business"):
-                v = row.get(field)
-                assert v is None or Decimal(str(v)) == 0, (
+                          "return_income", "actual_new_business"):
+                assert field in row, (
+                    f"{field} is not in the response; the test would pass "
+                    f"vacuously. Check the model.")
+                v = amount(row[field])
+                assert v is None or v == 0, (
                     f"{grain}: {row['canonical_manager']} has not started but "
                     f"reports {field} = {v}")
 
@@ -186,8 +218,8 @@ def test_budget_still_covers_the_whole_period(client, conn):
             (row["canonical_manager"], fy))
         if not whole:
             continue
-        reported = row.get("total_budget")
+        reported = amount(row.get("total_budget"))
         assert reported is not None, row["canonical_manager"]
-        assert abs(Decimal(str(reported)) - Decimal(str(whole))) < Decimal("0.05"), (
+        assert abs(reported - Decimal(str(whole))) < Decimal("0.05"), (
             f"{row['canonical_manager']}: the year's budget is trimmed to the "
             f"months that have started; it should be the whole year")
