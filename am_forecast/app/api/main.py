@@ -56,6 +56,18 @@ app.include_router(performance_router, prefix="/api")
 app.include_router(forecast_months_router, prefix="/api")
 
 
+# What bootstrap did, recorded rather than only logged.
+#
+# The startup hook logs through the root logger, which uvicorn does not always
+# capture into the deployment log. So an absent log line does not prove the hook
+# never ran -- and that ambiguity is what made this untraceable: "nothing was
+# applied" and "nothing ran" look identical from outside.
+#
+# Stored here and reported on /api/health, so the question has an answer that
+# does not depend on log plumbing.
+_BOOTSTRAP_RESULT: dict = {"ran": False, "note": "startup hook has not run"}
+
+
 @app.on_event("startup")
 def _bootstrap() -> None:
     """Bring the database up to date, when explicitly asked to.
@@ -66,10 +78,13 @@ def _bootstrap() -> None:
     """
     import logging
 
+    global _BOOTSTRAP_RESULT
     from ..bootstrap import run
     try:
         result = run(DSN)
-    except Exception:
+        _BOOTSTRAP_RESULT = {"ran": True, **result}
+    except Exception as exc:
+        _BOOTSTRAP_RESULT = {"ran": True, "error": f"{type(exc).__name__}: {exc}"}
         logging.exception("bootstrap failed; the app will start but may not work")
         return
     if result["migrated"]:
@@ -126,9 +141,53 @@ def health():
         checks["accounts"] = f"{n} account(s)" if n else "NONE — nobody can sign in"
         ready = ready and n > 0
 
+    # What this process believes about its own migrations.
+    #
+    # Production sat five migrations behind while every publish reported success,
+    # and there was no way to ask the running app what it could see. Diagnosing it
+    # came down to inferring from a half-remembered publish timestamp.
+    #
+    # These four answer it directly: whether auto-migrate is on IN THIS PROCESS,
+    # how many migration files it can find on disk, how many the database has
+    # recorded, and which files it therefore considers outstanding. If the
+    # deployment is not shipping the migrations, or the flag is not reaching the
+    # process, or the two disagree, it says so instead of failing silently.
+    migrations: dict = {}
+    try:
+        from ..bootstrap import AUTO_MIGRATE, MIGRATIONS, _files
+        on_disk = [f.name for f in _files()]
+        recorded = fetch_one("""SELECT count(*) AS n FROM schema_migration""")["n"] \
+            if fetch_one("SELECT to_regclass('public.schema_migration') IS NOT NULL AS ok")["ok"] \
+            else None
+        applied = set()
+        if recorded:
+            applied = {r["filename"] for r in fetch_all("SELECT filename FROM schema_migration")}
+        migrations = {
+            "auto_migrate_enabled": AUTO_MIGRATE,
+            "path": str(MIGRATIONS),
+            "files_found": len(on_disk),
+            "recorded_in_database": recorded,
+            "outstanding": [f for f in on_disk if f not in applied] if recorded is not None else on_disk,
+            # Distinguishes "the hook never ran" from "it ran and applied
+            # nothing", which look the same in the logs.
+            "startup": _BOOTSTRAP_RESULT,
+        }
+        if not on_disk:
+            checks["migrations"] = ("NONE FOUND ON DISK — the deployment is not "
+                                    "shipping migrations/versions")
+            ready = False
+        elif migrations["outstanding"]:
+            checks["migrations"] = (f"{len(migrations['outstanding'])} outstanding; "
+                                    f"auto-migrate is "
+                                    f"{'on' if AUTO_MIGRATE else 'OFF'}")
+        else:
+            checks["migrations"] = "ok"
+    except Exception as exc:
+        migrations = {"error": f"{type(exc).__name__}: {exc}"}
+
     return {"status": "ok" if ready else "not ready", "ready": ready,
             "checks": checks, "cut_off_date": cut_off, "timezone": TIMEZONE,
-            "gst_note": GST_NOTE}
+            "migrations": migrations, "gst_note": GST_NOTE}
 
 
 @app.get("/api/session", tags=["system"])
