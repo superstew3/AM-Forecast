@@ -29,4 +29,3 @@ AM_FORECAST_DSN = "postgresql://postgres:password@helium/heliumdb?sslmode=disabl
 AM_FORECAST_ORIGINS = "https://am-forecast.replit.app"
 
 [userenv.production]
-AM_FORECAST_AUTO_MIGRATE = "1"
