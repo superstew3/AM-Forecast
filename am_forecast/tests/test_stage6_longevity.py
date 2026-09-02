@@ -319,11 +319,41 @@ def test_budget_equals_forecast_plus_growth(client):
     assert checked >= 1
 
 
-def test_active_growth_percentage_is_reported(client):
+def test_active_growth_percentage_is_reported(client, conn):
+    """The rate the page reports must be the rate the system resolved.
+
+    This asserted a literal 0.0750, so it went red the moment somebody set a
+    manager to 10% through the budget page -- a legitimate use of the feature
+    failing the suite, which is how people learn to ignore it.
+
+    What matters is not the number but that the page reports the SAME rate the
+    hierarchy resolves, and names which level it came from. Read, not restated.
+    """
     d = _detail(client)
     assert d["active_growth_pct"]["available"]
-    assert Decimal(str(d["active_growth_pct"]["value"])) == Decimal("0.0750")
-    assert d["active_growth_basis"] in ("global", "manager", "manager_quarter")
+    basis = d["active_growth_basis"]
+    assert basis in ("global", "manager", "manager_quarter"), basis
+
+    # Most specific wins: manager_quarter, then manager, then global. Ask for
+    # the level the response claims and check the figure agrees with it.
+    if basis == "manager_quarter":
+        expected = scalar(conn, """SELECT growth_pct FROM growth_rate
+                                   WHERE active AND scope = 'manager_quarter'
+                                     AND canonical_manager = 'Sam Stewart'
+                                   ORDER BY id DESC LIMIT 1""")
+    elif basis == "manager":
+        expected = scalar(conn, """SELECT growth_pct FROM growth_rate
+                                   WHERE active AND scope = 'manager'
+                                     AND canonical_manager = 'Sam Stewart'
+                                   ORDER BY id DESC LIMIT 1""")
+    else:
+        expected = scalar(conn, """SELECT growth_pct FROM growth_rate
+                                   WHERE active AND scope = 'global'
+                                   ORDER BY id DESC LIMIT 1""")
+
+    assert expected is not None, f"no active {basis} rate to resolve against"
+    assert Decimal(str(d["active_growth_pct"]["value"])) == Decimal(str(expected)), (
+        f"the page reports a {basis} rate that does not match the one stored")
 
 
 def test_changing_a_manager_growth_moves_only_that_manager_grid(admin, conn):

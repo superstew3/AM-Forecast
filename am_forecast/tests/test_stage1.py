@@ -338,21 +338,38 @@ def test_budget_is_forecast_plus_growth(conn):
     """Total Budget = Renewal Forecast + growth target, at the applied rate."""
     fy = scalar(conn, """SELECT au_financial_year(cut_off_date)
                          FROM reporting_settings WHERE id = 1""")
+    # Row by row, at each row's OWN rate.
+    #
+    # This summed the whole year and compared it against the GLOBAL rate, which
+    # only holds while every manager is on it. The moment one is given an
+    # override -- which the budget page exists to allow -- the aggregate stops
+    # matching any single rate and the test fails on a legitimate change. A
+    # suite that goes red when somebody uses a feature teaches people to ignore
+    # it.
+    #
+    # v_budget_quarter already carries the applied rate per row, and leaves it
+    # NULL where a quarter mixes rates. Those rows are skipped rather than
+    # guessed at.
     result = rows(conn, """
-        SELECT SUM(original_renewal_forecast), SUM(new_business_growth_target),
-               SUM(total_budget)
+        SELECT canonical_manager, financial_quarter, growth_pct,
+               original_renewal_forecast, new_business_growth_target, total_budget
         FROM v_budget_quarter WHERE financial_year = %s""", (fy,))
-    if not result or result[0][0] is None:
+    if not result:
         pytest.skip("no budget rows for the current financial year")
-    orig, target, total = result[0]
 
-    # The applied rate lives in growth_rate. reporting_settings.default_growth_pct
-    # is a separate, unused column carrying a different value — reading it here
-    # made this test assert against a rate the system never applies.
-    rate = scalar(conn, """SELECT growth_pct FROM growth_rate
-                           WHERE active AND scope = 'global'""")
-    assert abs(target - orig * rate) <= Decimal("0.10")
-    assert abs(total - (orig + target)) <= CENT
+    checked = 0
+    for who, quarter, rate, orig, target, total in result:
+        if orig is None or total is None:
+            continue
+        # The identity holds for every row regardless of rate.
+        assert abs(total - (orig + (target or 0))) <= CENT, (who, quarter)
+        if rate is None:
+            continue          # the quarter mixes rates; no single one to check
+        assert abs((target or 0) - orig * rate) <= Decimal("0.10"), (who, quarter, rate)
+        checked += 1
+
+    assert checked, ("no quarter has a single applied rate, so the growth "
+                     "relationship could not be checked anywhere")
 
 def test_non_ranked_managers_count_to_totals_but_not_rankings(conn):
     """Rankings and business totals answer different questions.
