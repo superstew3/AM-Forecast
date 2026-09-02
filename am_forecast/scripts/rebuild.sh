@@ -43,6 +43,41 @@ RENEWALS=("${FOUND[@]:1}")
 for r in "${RENEWALS[@]}"; do echo "    renewals: $(basename "$r")"; done
 [ ${#RENEWALS[@]} -gt 0 ] || { echo "No renewals file found. Nothing to build."; exit 1; }
 
+# --- preserve what an operator set by hand -----------------------------------
+#
+# A rebuild drops the schema, so anything typed into the app rather than derived
+# from a CSV or a migration is destroyed. That has now bitten three times: July
+# and August's baselines, the ranking flags, and growth percentages -- somebody
+# sets a manager to 10%, a rebuild happens, and everyone is quietly back on the
+# default with nothing to say why.
+#
+# The first two are restored by replaying the scripts that created them. That
+# does not work for growth rates and month overrides: those are decisions, and
+# hard-coding today's values here would go stale the first time one changed.
+#
+# So they are carried across instead -- dumped before the drop, restored after
+# the migrations and seed. Whatever is set at the time survives, including
+# settings made after this script was written.
+PRESERVE=(growth_rate monthly_target_override forecast_month_lock
+          forecast_month_override manager_alias)
+CARRY="$(mktemp -t am_forecast_carry.XXXXXX.sql)"
+trap 'rm -f "$CARRY"' EXIT
+
+echo "==> Preserving operator settings"
+: > "$CARRY"
+for t in "${PRESERVE[@]}"; do
+    exists=$(psql "$DSN" -X -qtA -c \
+        "SELECT to_regclass('public.$t') IS NOT NULL")
+    if [ "$exists" = "t" ]; then
+        n=$(psql "$DSN" -X -qtA -c "SELECT count(*) FROM $t")
+        if [ "$n" -gt 0 ]; then
+            pg_dump "$DSN" --data-only --table="public.$t" \
+                    --no-owner --no-privileges >> "$CARRY" 2>/dev/null \
+                && echo "    $t: $n rows carried"
+        fi
+    fi
+done
+
 echo "==> Dropping and recreating the schema"
 psql "$DSN" -X -q -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 
@@ -126,6 +161,20 @@ PY
 # establish_july_2026_baseline.sql and set_month_forecast_from_file.py). A
 # rebuild that skips these two steps produces a database that looks complete
 # but silently has no forecast for either month.
+# Restored after the seed so the seed's defaults are in place first and these
+# override them, which is the same precedence the application applies.
+if [ -s "$CARRY" ]; then
+    echo "==> Restoring operator settings"
+    # ON_ERROR_STOP is deliberately off: a preserved row whose table changed
+    # shape in a later migration should be skipped with a warning, not abort a
+    # rebuild that is otherwise fine.
+    psql "$DSN" -X -q -f "$CARRY" 2>&1 | grep -i "error" | head -5 || true
+    for t in "${PRESERVE[@]}"; do
+        n=$(psql "$DSN" -X -qtA -c "SELECT count(*) FROM $t" 2>/dev/null || echo 0)
+        [ "$n" -gt 0 ] && echo "    $t: $n rows"
+    done
+fi
+
 echo "==> July 2026: establishing from supplied figures"
 psql "$DSN" -X -q -v ON_ERROR_STOP=1 -f scripts/establish_july_2026_baseline.sql > /dev/null
 
