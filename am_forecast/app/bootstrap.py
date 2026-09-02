@@ -73,7 +73,24 @@ def _table_exists(cur, name: str) -> bool:
 def pending(conn) -> list[Path]:
     """Migration files not yet recorded as applied."""
     with conn.cursor() as cur:
-        if not _table_exists(cur, "schema_migration"):
+        # An EMPTY tracking table is the same situation as a missing one.
+        #
+        # It only reconciled when the table did not exist. rebuild.sh applies
+        # every migration with a plain `psql -f` and records none of them, so a
+        # rebuilt database ends up with the table present and nothing in it --
+        # and pending() then reports all twenty-four files as un-applied against
+        # a schema that already has them.
+        #
+        # With auto-migrate on, that replays 0001 onward over a populated
+        # database. It is the same fault as the hardcoded 0015 watermark that
+        # silently dropped bonus_gst_divisor, reached through a different door:
+        # one asked the wrong question about WHICH files were applied, this one
+        # about WHETHER anything had been recorded at all.
+        recorded = 0
+        if _table_exists(cur, "schema_migration"):
+            cur.execute("SELECT count(*) FROM schema_migration")
+            recorded = cur.fetchone()[0]
+        if not _table_exists(cur, "schema_migration") or recorded == 0:
             # Nothing has been recorded. If the schema is clearly already in
             # place, treat every migration file that currently exists as
             # applied, not just the ones up to some filename typed in here.

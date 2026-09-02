@@ -82,10 +82,28 @@ echo "==> Dropping and recreating the schema"
 psql "$DSN" -X -q -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 
 echo "==> Migrations"
+# Each file is RECORDED as well as applied.
+#
+# This loop used to apply every migration with a plain psql -f and record none
+# of them, leaving schema_migration present and empty. Anything asking "what has
+# been applied here" then got the wrong answer -- including bootstrap.pending(),
+# which with auto-migrate on would replay all twenty-four files over a schema
+# that already had them.
+#
+# A rebuilt database now says truthfully what it holds, and the tracking table
+# means the same thing on every database instead of only on the ones that
+# happened to be built another way.
 for f in migrations/versions/*.sql; do
     psql "$DSN" -X -q -v ON_ERROR_STOP=1 -f "$f" > /dev/null
+    psql "$DSN" -X -q -v ON_ERROR_STOP=1 -c \
+        "INSERT INTO schema_migration (filename, applied_by)
+         VALUES ('$(basename "$f")', 'rebuild.sh')
+         ON CONFLICT DO NOTHING" > /dev/null 2>&1 || true
     echo "    $(basename "$f")"
 done
+
+RECORDED=$(psql "$DSN" -X -qtA -c "SELECT count(*) FROM schema_migration" 2>/dev/null || echo 0)
+echo "    recorded in schema_migration: $RECORDED"
 
 echo "==> Seed"
 python3 -m app.seed.load_seed "$DSN" > /dev/null
