@@ -726,3 +726,67 @@ button.primary:hover:not(:disabled) { background: #17405e; }
   font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--ink-soft);
 }
+
+
+/* Operational status.
+ *
+ * Three severities and no more. Colour carries meaning here exactly as it does
+ * everywhere else in this interface -- favourable, watch, adverse -- and is
+ * never the only carrier: every row states its verdict in words as well, so the
+ * page survives being colour-blind, printed, or pasted into an email. */
+.status-summary {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line); border-left: 3px solid var(--na);
+  border-radius: 5px; padding: 11px 14px; margin-bottom: var(--gap);
+  background: var(--panel); font-size: 13px;
+}
+.status-summary.sev-ok        { border-left-color: var(--good);  background: var(--good-bg); }
+.status-summary.sev-attention { border-left-color: var(--watch); background: var(--watch-bg); }
+.status-summary.sev-action    { border-left-color: var(--bad);   background: var(--bad-bg); }
+.status-summary.sev-ok strong        { color: var(--good); }
+.status-summary.sev-attention strong { color: var(--watch); }
+.status-summary.sev-action strong    { color: var(--bad); }
+.status-asat { color: var(--ink-soft); font-size: var(--t-xs); }
+.status-refresh { margin-left: 10px; padding: 3px 9px; font-size: var(--t-xs); }
+
+.status-list { list-style: none; margin: 0; padding: 0; }
+.status-item {
+  display: grid; grid-template-columns: 10px 1fr; gap: 12px;
+  padding: 13px 0; border-bottom: 1px solid var(--line-soft);
+}
+.status-item:last-child { border-bottom: 0; padding-bottom: 0; }
+.status-item:first-child { padding-top: 0; }
+
+/* A bar rather than a dot: it scales with the row, so a long explanation stays
+   visibly attached to its severity instead of the marker floating at the top. */
+.status-flag { border-radius: 3px; background: var(--na); }
+.sev-ok        > .status-flag { background: var(--good); }
+.sev-attention > .status-flag { background: var(--watch); }
+.sev-action    > .status-flag { background: var(--bad); }
+
+.status-line { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.status-title { font-weight: 620; font-size: var(--t-base); }
+.status-verdict {
+  font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 10px;
+  background: var(--na-bg); color: var(--na);
+}
+.sev-ok        .status-verdict { background: var(--good-bg);  color: var(--good); }
+.sev-attention .status-verdict { background: var(--watch-bg); color: var(--watch); }
+.sev-action    .status-verdict { background: var(--bad-bg);   color: var(--bad); }
+.status-due { margin-left: auto; font-size: var(--t-xs); color: var(--ink-soft); }
+
+.status-headline { margin: 4px 0 0; font-size: var(--t-md); font-weight: 500; }
+.status-detail { margin: 4px 0 0; color: var(--ink-soft); font-size: var(--t-sm); max-width: 78ch; }
+.status-todo { margin: 5px 0 0; font-size: var(--t-sm); max-width: 78ch; }
+.sev-ok .status-todo { color: var(--ink-faint); }
+.sev-attention .status-todo,
+.sev-action .status-todo { color: var(--ink); font-weight: 500; }
+
+/* The count on the nav item, so an unread problem is visible from every page. */
+.nav-badge {
+  float: right; min-width: 18px; padding: 0 5px; border-radius: 9px;
+  font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center;
+  background: var(--watch); color: #fff;
+}
+.nav-badge.sev-action { background: #c0504d; }

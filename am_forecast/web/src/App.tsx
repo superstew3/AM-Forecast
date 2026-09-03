@@ -20,8 +20,12 @@ import Settings from "./pages/Settings";
 import Uploads from "./pages/Uploads";
 import Bonus from "./pages/Bonus";
 import Budget from "./pages/Budget";
+import Status from "./pages/Status";
 
 const AREAS = [
+  // First, deliberately. It is the only page that answers "is anything wrong",
+  // and a page you have to go looking for does not get looked at.
+  { to: "/status", label: "Operational status" },
   { to: "/business", label: "Business performance" },
   { to: "/performance", label: "Performance by month" },
   { to: "/managers-index", label: "Account managers" },
@@ -63,6 +67,12 @@ export default function App() {
 
 function Shell({ user, onSignOut }: { user: any; onSignOut: () => void }) {
   const base = useQuery({ queryKey: ["base"], queryFn: api.basePosition });
+  // Shared query key with the status page, so this costs one request between
+  // them rather than one each.
+  const status = useQuery({ queryKey: ["status"], queryFn: api.status });
+  const needing = status.data
+    ? status.data.counts.action + status.data.counts.attention
+    : 0;
 
   return (
     <div className="shell">
@@ -80,6 +90,14 @@ function Shell({ user, onSignOut }: { user: any; onSignOut: () => void }) {
             <NavLink key={a.to} to={a.to} end
                      className={({ isActive }) => (isActive ? "active" : "")}>
               {a.label}
+              {/* The count rides on the nav item so it is visible from every
+                  page. A status screen nobody opens reports nothing. */}
+              {a.to === "/status" && needing > 0 && (
+                <span className={`nav-badge sev-${status.data!.overall}`}
+                      title={`${needing} item(s) need attention`}>
+                  {needing}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -101,6 +119,7 @@ function Shell({ user, onSignOut }: { user: any; onSignOut: () => void }) {
       <main>
         <Routes>
           <Route path="/" element={<Navigate to="/business" replace />} />
+          <Route path="/status" element={<Status />} />
           <Route path="/business" element={<Business />} />
           <Route path="/performance" element={<Performance />} />
           <Route path="/managers-index" element={<ManagerIndex />} />

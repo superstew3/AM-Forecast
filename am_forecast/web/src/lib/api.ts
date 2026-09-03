@@ -219,6 +219,35 @@ export interface Periods {
   quarters: { quarter: number; label: string; months: string }[];
 }
 
+/**
+ * One operational check.
+ *
+ * Every string here is written by v_operational_status and rendered verbatim.
+ * The interface does not decide what is wrong, how serious it is, or what to do
+ * about it -- restating any of that here would give the app two answers to the
+ * same question.
+ */
+export interface StatusCheck {
+  sort_order: number;
+  check_key: string;
+  title: string;
+  severity: "ok" | "attention" | "action";
+  headline: string;
+  detail: string;
+  what_to_do: string;
+  as_at: string | null;
+  next_due: string | null;
+  item_count: number;
+}
+
+export interface OperationalStatus {
+  items: StatusCheck[];
+  overall: "ok" | "attention" | "action";
+  counts: { ok: number; attention: number; action: number };
+  migrations: Record<string, any>;
+  meta: Meta;
+}
+
 export interface Session {
   username: string;
   role: "viewer" | "manager" | "administrator";
@@ -289,6 +318,7 @@ export const api = {
   periods: () => request<Periods>("/api/periods"),
   mappings: () => request<any>("/api/reference/mappings"),
   basePosition: () => request<any>("/api/base-position"),
+  status: () => request<OperationalStatus>("/api/status"),
   reference: () => request<any>("/api/reference"),
   business: (fy: number) => request<BusinessSummary>(`/api/business?financial_year=${fy}`),
   yearOverYear: (fy: number, manager?: string) =>

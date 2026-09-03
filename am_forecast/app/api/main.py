@@ -26,6 +26,7 @@ from .operations import router as operations_router
 from .performance import router as performance_router
 from .settings import router as settings_router
 from .reporting import router as reporting_router
+from .status import migration_status, router as status_router
 
 app = FastAPI(
     title="Account Manager Income Forecasting",
@@ -54,6 +55,7 @@ app.include_router(bonus_router, prefix="/api")
 app.include_router(operations_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
 app.include_router(forecast_months_router, prefix="/api")
+app.include_router(status_router, prefix="/api")
 
 
 # What bootstrap did, recorded rather than only logged.
@@ -147,43 +149,29 @@ def health():
     # and there was no way to ask the running app what it could see. Diagnosing it
     # came down to inferring from a half-remembered publish timestamp.
     #
-    # These four answer it directly: whether auto-migrate is on IN THIS PROCESS,
-    # how many migration files it can find on disk, how many the database has
-    # recorded, and which files it therefore considers outstanding. If the
-    # deployment is not shipping the migrations, or the flag is not reaching the
-    # process, or the two disagree, it says so instead of failing silently.
-    migrations: dict = {}
-    try:
-        from ..bootstrap import AUTO_MIGRATE, MIGRATIONS, _files
-        on_disk = [f.name for f in _files()]
-        recorded = fetch_one("""SELECT count(*) AS n FROM schema_migration""")["n"] \
-            if fetch_one("SELECT to_regclass('public.schema_migration') IS NOT NULL AS ok")["ok"] \
-            else None
-        applied = set()
-        if recorded:
-            applied = {r["filename"] for r in fetch_all("SELECT filename FROM schema_migration")}
-        migrations = {
-            "auto_migrate_enabled": AUTO_MIGRATE,
-            "path": str(MIGRATIONS),
-            "files_found": len(on_disk),
-            "recorded_in_database": recorded,
-            "outstanding": [f for f in on_disk if f not in applied] if recorded is not None else on_disk,
-            # Distinguishes "the hook never ran" from "it ran and applied
-            # nothing", which look the same in the logs.
-            "startup": _BOOTSTRAP_RESULT,
-        }
-        if not on_disk:
+    # The comparison itself now lives in one place, api/status.py, because the
+    # operational status panel needs exactly the same answer. Two copies of "is
+    # the schema current" is how the question came to have two answers in the
+    # first place.
+    #
+    # `startup` stays here: it is this process's record of what its own bootstrap
+    # hook did, and it distinguishes "the hook never ran" from "it ran and applied
+    # nothing", which look identical in the logs.
+    migrations = {**migration_status(), "startup": _BOOTSTRAP_RESULT}
+    # Where the comparison could not be made at all, `checks` deliberately
+    # carries no migrations key. An absent answer and a clean answer must not
+    # look the same to a monitor.
+    if not migrations.get("error"):
+        if not migrations["files_found"]:
             checks["migrations"] = ("NONE FOUND ON DISK — the deployment is not "
                                     "shipping migrations/versions")
             ready = False
         elif migrations["outstanding"]:
-            checks["migrations"] = (f"{len(migrations['outstanding'])} outstanding; "
-                                    f"auto-migrate is "
-                                    f"{'on' if AUTO_MIGRATE else 'OFF'}")
+            checks["migrations"] = (
+                f"{len(migrations['outstanding'])} outstanding; auto-migrate is "
+                f"{'on' if migrations['auto_migrate_enabled'] else 'OFF'}")
         else:
             checks["migrations"] = "ok"
-    except Exception as exc:
-        migrations = {"error": f"{type(exc).__name__}: {exc}"}
 
     return {"status": "ok" if ready else "not ready", "ready": ready,
             "checks": checks, "cut_off_date": cut_off, "timezone": TIMEZONE,
